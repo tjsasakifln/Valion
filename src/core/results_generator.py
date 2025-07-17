@@ -134,7 +134,7 @@ class ResultsGenerator:
     
     def generate_model_summary(self, model_result) -> Dict[str, Any]:
         """
-        Gera resumo do modelo.
+        Gera resumo do modelo com interpretabilidade avançada.
         
         Args:
             model_result: Resultado do modelo
@@ -144,8 +144,19 @@ class ResultsGenerator:
         """
         performance = model_result.performance
         
+        # Determinar tipo de modelo
+        model_type_map = {
+            'elastic_net': 'Elastic Net Regression',
+            'xgboost': 'XGBoost Regression',
+            'gradient_boosting': 'Gradient Boosting Regression',
+            'random_forest': 'Random Forest Regression'
+        }
+        
+        model_display_name = model_type_map.get(model_result.model_type, model_result.model_type)
+        
         summary = {
-            'model_type': 'Elastic Net Regression',
+            'model_type': model_display_name,
+            'model_type_code': model_result.model_type,
             'hyperparameters': model_result.best_params,
             'training_summary': model_result.training_summary,
             'performance_metrics': {
@@ -157,13 +168,113 @@ class ResultsGenerator:
                 'cv_rmse_std': np.std(performance.cv_scores)
             },
             'feature_coefficients': performance.feature_coefficients,
-            'significant_features': [
-                feature for feature, coef in performance.feature_coefficients.items()
-                if abs(coef) > 0.01  # Threshold para coeficientes significativos
-            ]
+            'significant_features': self._get_significant_features(performance.feature_coefficients, model_result.model_type)
         }
         
+        # Adicionar Permutation Feature Importance se disponível
+        if performance.permutation_importance:
+            summary['permutation_importance'] = performance.permutation_importance
+            summary['top_permutation_features'] = sorted(
+                performance.permutation_importance.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:10]
+        
+        # Adicionar SHAP values se disponível
+        if performance.shap_feature_importance:
+            summary['shap_feature_importance'] = performance.shap_feature_importance
+            summary['top_shap_features'] = sorted(
+                performance.shap_feature_importance.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:10]
+        
+        # Análise de interpretabilidade
+        summary['interpretability_analysis'] = self._generate_interpretability_analysis(performance)
+        
         return summary
+    
+    def _get_significant_features(self, feature_coefficients: Dict[str, float], model_type: str) -> List[str]:
+        """
+        Identifica features significativas baseado no tipo de modelo.
+        """
+        if model_type == 'elastic_net':
+            # Para modelos lineares, usar threshold nos coeficientes
+            return [
+                feature for feature, coef in feature_coefficients.items()
+                if abs(coef) > 0.01
+            ]
+        else:
+            # Para modelos baseados em árvore, usar threshold na importância
+            sorted_features = sorted(
+                feature_coefficients.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )
+            # Pegar top 50% das features ou pelo menos 10
+            threshold_idx = max(10, len(sorted_features) // 2)
+            return [feature for feature, _ in sorted_features[:threshold_idx]]
+    
+    def _generate_interpretability_analysis(self, performance) -> Dict[str, Any]:
+        """
+        Gera análise de interpretabilidade do modelo.
+        """
+        analysis = {
+            'glass_box_level': 'high',  # Valion é uma plataforma "glass-box"
+            'available_explanations': []
+        }
+        
+        # Verificar quais tipos de explicação estão disponíveis
+        if performance.feature_coefficients:
+            analysis['available_explanations'].append('feature_coefficients')
+        
+        if performance.permutation_importance:
+            analysis['available_explanations'].append('permutation_importance')
+        
+        if performance.shap_feature_importance:
+            analysis['available_explanations'].append('shap_values')
+        
+        # Consistência entre diferentes métodos de explicação
+        if performance.permutation_importance and performance.feature_coefficients:
+            analysis['explanation_consistency'] = self._calculate_explanation_consistency(
+                performance.feature_coefficients,
+                performance.permutation_importance
+            )
+        
+        return analysis
+    
+    def _calculate_explanation_consistency(self, coefficients: Dict[str, float], 
+                                         permutation: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Calcula consistência entre diferentes métodos de explicação.
+        """
+        common_features = set(coefficients.keys()) & set(permutation.keys())
+        
+        if len(common_features) < 3:
+            return {'status': 'insufficient_features'}
+        
+        # Correlation entre rankings
+        coef_ranking = {f: i for i, (f, _) in enumerate(
+            sorted(coefficients.items(), key=lambda x: abs(x[1]), reverse=True)
+        )}
+        perm_ranking = {f: i for i, (f, _) in enumerate(
+            sorted(permutation.items(), key=lambda x: x[1], reverse=True)
+        )}
+        
+        rank_differences = [
+            abs(coef_ranking[f] - perm_ranking[f]) for f in common_features
+        ]
+        
+        avg_rank_diff = np.mean(rank_differences)
+        max_possible_diff = len(common_features) - 1
+        
+        consistency_score = 1 - (avg_rank_diff / max_possible_diff) if max_possible_diff > 0 else 1
+        
+        return {
+            'status': 'calculated',
+            'consistency_score': consistency_score,
+            'interpretation': 'high' if consistency_score > 0.7 else 'medium' if consistency_score > 0.5 else 'low'
+        }
     
     def generate_nbr_summary(self, nbr_result) -> Dict[str, Any]:
         """
@@ -258,7 +369,7 @@ class ResultsGenerator:
             Descrição da metodologia
         """
         methodology = {
-            'approach': 'Regressão Elastic Net com validação NBR 14653',
+            'approach': 'Machine Learning Avançado com validação NBR 14653',
             'phases': [
                 {
                     'phase': 'Fase 1 - Ingestão e Validação',

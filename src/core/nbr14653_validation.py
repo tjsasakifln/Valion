@@ -310,10 +310,140 @@ class NBR14653Validator:
             recommendation="Mínimo de 30 observações para análise estatística"
         )
     
-    def validate_model(self, model, X_train: pd.DataFrame, X_test: pd.DataFrame,
-                      y_train: pd.Series, y_test: pd.Series) -> NBRValidationResult:
+    def test_extrapolation_range(self, model, X_train: pd.DataFrame, 
+                                X_predict: pd.DataFrame) -> NBRTestResult:
         """
-        Executa bateria completa de testes NBR 14653.
+        Teste de extrapolação - verifica se predições estão dentro do range de treino.
+        
+        Args:
+            model: Modelo treinado
+            X_train: Features de treino
+            X_predict: Features para predição
+            
+        Returns:
+            Resultado do teste de extrapolação
+        """
+        extrapolation_violations = 0
+        total_features = len(X_train.columns)
+        
+        for col in X_train.columns:
+            if col in X_predict.columns:
+                train_min = X_train[col].min()
+                train_max = X_train[col].max()
+                
+                # Verificar valores fora do range
+                violations = ((X_predict[col] < train_min) | 
+                             (X_predict[col] > train_max)).sum()
+                extrapolation_violations += violations
+        
+        # Calcular porcentagem de extrapolação
+        total_predictions = len(X_predict) * total_features
+        extrapolation_rate = extrapolation_violations / total_predictions if total_predictions > 0 else 0
+        
+        # Aprovar se menos de 10% das predições são extrapolações
+        passed = extrapolation_rate < 0.1
+        
+        return NBRTestResult(
+            test_name="Teste de Extrapolação",
+            passed=passed,
+            value=extrapolation_rate,
+            threshold=0.1,
+            description=f"Taxa de extrapolação = {extrapolation_rate:.2%}",
+            recommendation="Menos de 10% das predições devem ser extrapolações"
+        )
+    
+    def test_prediction_intervals(self, model, X_test: pd.DataFrame, 
+                                 y_test: pd.Series, confidence_level: float = 0.95) -> NBRTestResult:
+        """
+        Teste de intervalos de predição.
+        
+        Args:
+            model: Modelo treinado
+            X_test: Features de teste
+            y_test: Target de teste
+            confidence_level: Nível de confiança
+            
+        Returns:
+            Resultado do teste de intervalos
+        """
+        from sklearn.metrics import mean_squared_error
+        
+        y_pred = model.predict(X_test)
+        residuals = y_test - y_pred
+        
+        # Calcular erro padrão da predição
+        mse = mean_squared_error(y_test, y_pred)
+        se_pred = np.sqrt(mse)
+        
+        # Calcular intervalos de confiança
+        alpha = 1 - confidence_level
+        z_score = stats.norm.ppf(1 - alpha/2)
+        
+        lower_bound = y_pred - z_score * se_pred
+        upper_bound = y_pred + z_score * se_pred
+        
+        # Verificar quantos valores estão dentro dos intervalos
+        within_intervals = ((y_test >= lower_bound) & (y_test <= upper_bound)).sum()
+        coverage_rate = within_intervals / len(y_test)
+        
+        # Aprovar se taxa de cobertura está próxima do nível de confiança
+        passed = abs(coverage_rate - confidence_level) < 0.05
+        
+        return NBRTestResult(
+            test_name=f"Intervalos de Predição ({confidence_level:.0%})",
+            passed=passed,
+            value=coverage_rate,
+            threshold=confidence_level,
+            description=f"Taxa de cobertura = {coverage_rate:.2%}",
+            recommendation=f"Taxa de cobertura deve estar próxima de {confidence_level:.0%}"
+        )
+    
+    def test_homoscedasticity(self, model, X_test: pd.DataFrame, 
+                             y_test: pd.Series) -> NBRTestResult:
+        """
+        Teste de homoscedasticidade dos resíduos (Breusch-Pagan).
+        
+        Args:
+            model: Modelo treinado
+            X_test: Features de teste
+            y_test: Target de teste
+            
+        Returns:
+            Resultado do teste de homoscedasticidade
+        """
+        from sklearn.linear_model import LinearRegression
+        
+        y_pred = model.predict(X_test)
+        residuals = y_test - y_pred
+        squared_residuals = residuals ** 2
+        
+        # Regressão dos resíduos quadráticos contra valores preditos
+        reg = LinearRegression()
+        reg.fit(y_pred.reshape(-1, 1), squared_residuals)
+        r2_residuals = reg.score(y_pred.reshape(-1, 1), squared_residuals)
+        
+        # Teste Breusch-Pagan
+        n = len(residuals)
+        lm_statistic = n * r2_residuals
+        p_value = 1 - stats.chi2.cdf(lm_statistic, df=1)
+        
+        # Homoscedasticidade se p-value > 0.05
+        passed = p_value > 0.05
+        
+        return NBRTestResult(
+            test_name="Teste de Homoscedasticidade (Breusch-Pagan)",
+            passed=passed,
+            value=p_value,
+            threshold=0.05,
+            description=f"LM = {lm_statistic:.4f}, p-value = {p_value:.4f}",
+            recommendation="p-value > 0.05 indica homoscedasticidade"
+        )
+    
+    def validate_model(self, model, X_train: pd.DataFrame, X_test: pd.DataFrame,
+                      y_train: pd.Series, y_test: pd.Series, 
+                      X_predict: Optional[pd.DataFrame] = None) -> NBRValidationResult:
+        """
+        Executa bateria completa de testes NBR 14653 com verificações de extrapolação.
         
         Args:
             model: Modelo treinado
@@ -321,23 +451,30 @@ class NBR14653Validator:
             X_test: Features de teste
             y_train: Target de treino
             y_test: Target de teste
+            X_predict: Features para predição (opcional, para teste de extrapolação)
             
         Returns:
             Resultado completo da validação
         """
         tests = []
         
-        # Executar todos os testes
+        # Executar todos os testes básicos
         tests.append(self.test_coefficient_determination(model, X_test, y_test))
         tests.append(self.test_f_significance(model, X_train, y_train))
         tests.append(self.test_coefficients_significance(model, X_train, y_train))
         tests.append(self.test_residuals_normality(model, X_test, y_test))
         tests.append(self.test_autocorrelation(model, X_test, y_test))
         tests.append(self.test_multicollinearity(X_train))
+        tests.append(self.test_homoscedasticity(model, X_test, y_test))
+        tests.append(self.test_prediction_intervals(model, X_test, y_test))
         
         # Combinar datasets para teste de tamanho
         df_combined = pd.concat([X_train, X_test])
         tests.append(self.test_sample_size(df_combined))
+        
+        # Teste de extrapolação se dados de predição fornecidos
+        if X_predict is not None and len(X_predict) > 0:
+            tests.append(self.test_extrapolation_range(model, X_train, X_predict))
         
         # Calcular score de conformidade
         passed_tests = sum(1 for test in tests if test.passed)
@@ -354,14 +491,25 @@ class NBR14653Validator:
         else:
             overall_grade = "Inadequado"
         
-        # Resumo
+        # Resumo expandido
         summary = {
             'total_tests': len(tests),
             'passed_tests': passed_tests,
             'compliance_score': compliance_score,
             'r2_value': r2_test.value,
-            'overall_grade': overall_grade
+            'overall_grade': overall_grade,
+            'extrapolation_tested': X_predict is not None,
+            'critical_failures': [test.test_name for test in tests 
+                                if not test.passed and 'R²' in test.test_name],
+            'advanced_tests_passed': sum(1 for test in tests 
+                                       if test.passed and test.test_name in [
+                                           'Teste de Homoscedasticidade (Breusch-Pagan)',
+                                           'Intervalos de Predição (95%)',
+                                           'Teste de Extrapolação'
+                                       ])
         }
+        
+        self.logger.info(f"Validação NBR 14653 concluída: {overall_grade} ({compliance_score:.2%} conformidade)")
         
         return NBRValidationResult(
             overall_grade=overall_grade,
@@ -369,3 +517,59 @@ class NBR14653Validator:
             summary=summary,
             compliance_score=compliance_score
         )
+    
+    def generate_validation_report(self, validation_result: NBRValidationResult) -> str:
+        """
+        Gera relatório textual da validação NBR 14653.
+        
+        Args:
+            validation_result: Resultado da validação
+            
+        Returns:
+            Relatório em formato texto
+        """
+        report = []
+        report.append("=" * 60)
+        report.append("RELATÓRIO DE VALIDAÇÃO NBR 14653")
+        report.append("=" * 60)
+        report.append("")
+        
+        # Resumo geral
+        report.append(f"GRAU DE PRECISÃO: {validation_result.overall_grade}")
+        report.append(f"SCORE DE CONFORMIDADE: {validation_result.compliance_score:.1%}")
+        report.append(f"TESTES APROVADOS: {validation_result.summary['passed_tests']}/{validation_result.summary['total_tests']}")
+        report.append("")
+        
+        # Resultados por teste
+        report.append("RESULTADOS DETALHADOS:")
+        report.append("-" * 40)
+        
+        for test in validation_result.individual_tests:
+            status = "✓ PASSOU" if test.passed else "✗ FALHOU"
+            report.append(f"{test.test_name}: {status}")
+            report.append(f"  Valor: {test.value:.4f} (Limiar: {test.threshold:.4f})")
+            report.append(f"  {test.description}")
+            report.append(f"  Recomendação: {test.recommendation}")
+            report.append("")
+        
+        # Conclusões
+        report.append("CONCLUSÕES:")
+        report.append("-" * 40)
+        
+        if validation_result.overall_grade == "Superior":
+            report.append("O modelo atende aos critérios de grau SUPERIOR da NBR 14653.")
+            report.append("Pode ser utilizado com alta confiança para avaliações.")
+        elif validation_result.overall_grade == "Normal":
+            report.append("O modelo atende aos critérios de grau NORMAL da NBR 14653.")
+            report.append("Adequado para a maioria das avaliações imobiliárias.")
+        elif validation_result.overall_grade == "Inferior":
+            report.append("O modelo atende aos critérios de grau INFERIOR da NBR 14653.")
+            report.append("Uso limitado, requer cuidados adicionais.")
+        else:
+            report.append("O modelo NÃO ATENDE aos critérios mínimos da NBR 14653.")
+            report.append("Não recomendado para avaliações formais.")
+        
+        report.append("")
+        report.append("=" * 60)
+        
+        return "\n".join(report)

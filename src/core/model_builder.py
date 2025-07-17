@@ -7,9 +7,13 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from sklearn.linear_model import ElasticNet, ElasticNetCV
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
+from sklearn.inspection import permutation_importance
+import xgboost as xgb
+import shap
 from dataclasses import dataclass
 import logging
 import joblib
@@ -25,25 +29,33 @@ class ModelPerformance:
     mape: float
     cv_scores: List[float]
     feature_coefficients: Dict[str, float]
+    shap_values: Optional[np.ndarray] = None
+    shap_feature_importance: Optional[Dict[str, float]] = None
+    permutation_importance: Optional[Dict[str, float]] = None
 
 
 @dataclass
 class ModelResult:
     """Resultado do treinamento do modelo."""
-    model: ElasticNet
+    model: Any  # Can be ElasticNet, XGBoost, or GradientBoosting
     performance: ModelPerformance
     best_params: Dict[str, Any]
     training_summary: Dict[str, Any]
+    model_type: str
+    explainer: Optional[Any] = None  # SHAP explainer
 
 
-class ElasticNetModelBuilder:
-    """Construtor de modelo Elastic Net para avaliação imobiliária."""
+class ModelBuilder:
+    """Construtor de modelos para avaliação imobiliária com Modo Especialista."""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.model = None
         self.scaler = StandardScaler()
+        self.explainer = None
+        self.expert_mode = config.get('expert_mode', False)
+        self.model_type = config.get('model_type', 'elastic_net')
         
     def prepare_data(self, df: pd.DataFrame, target_col: str = 'valor', 
                     test_size: float = 0.2) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
@@ -84,7 +96,7 @@ class ElasticNetModelBuilder:
     
     def optimize_hyperparameters(self, X_train: pd.DataFrame, y_train: pd.Series) -> Dict[str, Any]:
         """
-        Otimiza hiperparâmetros do Elastic Net.
+        Otimiza hiperparâmetros do modelo selecionado.
         
         Args:
             X_train: Features de treino
@@ -93,16 +105,45 @@ class ElasticNetModelBuilder:
         Returns:
             Melhores parâmetros encontrados
         """
-        # Grid de parâmetros
-        param_grid = {
-            'alpha': [0.001, 0.01, 0.1, 1.0, 10.0],
-            'l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9]
-        }
+        if self.model_type == 'elastic_net':
+            param_grid = {
+                'alpha': [0.001, 0.01, 0.1, 1.0, 10.0],
+                'l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9]
+            }
+            model = ElasticNet(random_state=42, max_iter=1000)
+            
+        elif self.model_type == 'xgboost':
+            param_grid = {
+                'n_estimators': [100, 200, 300],
+                'max_depth': [3, 5, 7],
+                'learning_rate': [0.01, 0.1, 0.2],
+                'subsample': [0.8, 0.9, 1.0]
+            }
+            model = xgb.XGBRegressor(random_state=42)
+            
+        elif self.model_type == 'gradient_boosting':
+            param_grid = {
+                'n_estimators': [100, 200, 300],
+                'max_depth': [3, 5, 7],
+                'learning_rate': [0.01, 0.1, 0.2],
+                'subsample': [0.8, 0.9, 1.0]
+            }
+            model = GradientBoostingRegressor(random_state=42)
+            
+        elif self.model_type == 'random_forest':
+            param_grid = {
+                'n_estimators': [100, 200, 300],
+                'max_depth': [5, 10, None],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4]
+            }
+            model = RandomForestRegressor(random_state=42)
+        else:
+            raise ValueError(f"Tipo de modelo não suportado: {self.model_type}")
         
         # Grid Search com cross-validation
-        elastic_net = ElasticNet(random_state=42, max_iter=1000)
         grid_search = GridSearchCV(
-            elastic_net, 
+            model, 
             param_grid, 
             cv=5, 
             scoring='neg_mean_squared_error',
@@ -111,13 +152,13 @@ class ElasticNetModelBuilder:
         
         grid_search.fit(X_train, y_train)
         
-        self.logger.info(f"Melhores parâmetros: {grid_search.best_params_}")
+        self.logger.info(f"Melhores parâmetros ({self.model_type}): {grid_search.best_params_}")
         return grid_search.best_params_
     
     def train_model(self, X_train: pd.DataFrame, y_train: pd.Series, 
-                   hyperparams: Optional[Dict[str, Any]] = None) -> ElasticNet:
+                   hyperparams: Optional[Dict[str, Any]] = None) -> Any:
         """
-        Treina o modelo Elastic Net.
+        Treina o modelo selecionado.
         
         Args:
             X_train: Features de treino
@@ -130,25 +171,51 @@ class ElasticNetModelBuilder:
         if hyperparams is None:
             hyperparams = self.optimize_hyperparameters(X_train, y_train)
         
-        # Treinar modelo final
-        self.model = ElasticNet(
-            alpha=hyperparams['alpha'],
-            l1_ratio=hyperparams['l1_ratio'],
-            random_state=42,
-            max_iter=1000
-        )
+        # Treinar modelo conforme o tipo
+        if self.model_type == 'elastic_net':
+            self.model = ElasticNet(
+                alpha=hyperparams['alpha'],
+                l1_ratio=hyperparams['l1_ratio'],
+                random_state=42,
+                max_iter=1000
+            )
+        elif self.model_type == 'xgboost':
+            self.model = xgb.XGBRegressor(
+                n_estimators=hyperparams['n_estimators'],
+                max_depth=hyperparams['max_depth'],
+                learning_rate=hyperparams['learning_rate'],
+                subsample=hyperparams['subsample'],
+                random_state=42
+            )
+        elif self.model_type == 'gradient_boosting':
+            self.model = GradientBoostingRegressor(
+                n_estimators=hyperparams['n_estimators'],
+                max_depth=hyperparams['max_depth'],
+                learning_rate=hyperparams['learning_rate'],
+                subsample=hyperparams['subsample'],
+                random_state=42
+            )
+        elif self.model_type == 'random_forest':
+            self.model = RandomForestRegressor(
+                n_estimators=hyperparams['n_estimators'],
+                max_depth=hyperparams['max_depth'],
+                min_samples_split=hyperparams['min_samples_split'],
+                min_samples_leaf=hyperparams['min_samples_leaf'],
+                random_state=42
+            )
         
         self.model.fit(X_train, y_train)
         
-        self.logger.info("Modelo treinado com sucesso")
+        self.logger.info(f"Modelo {self.model_type} treinado com sucesso")
         return self.model
     
-    def evaluate_model(self, X_test: pd.DataFrame, y_test: pd.Series, 
-                      feature_names: List[str]) -> ModelPerformance:
+    def evaluate_model(self, X_train: pd.DataFrame, X_test: pd.DataFrame, 
+                      y_test: pd.Series, feature_names: List[str]) -> ModelPerformance:
         """
-        Avalia performance do modelo.
+        Avalia performance do modelo com interpretabilidade SHAP.
         
         Args:
+            X_train: Features de treino (para SHAP)
             X_test: Features de teste
             y_test: Target de teste
             feature_names: Nomes das features
@@ -173,8 +240,26 @@ class ElasticNetModelBuilder:
                                    scoring='neg_mean_squared_error')
         cv_scores = np.sqrt(-cv_scores)  # Converter para RMSE
         
-        # Coeficientes das features
-        feature_coefficients = dict(zip(feature_names, self.model.coef_))
+        # Feature importance/coefficients
+        feature_coefficients = self._get_feature_importance(feature_names)
+        
+        # SHAP values para interpretabilidade
+        shap_values = None
+        shap_feature_importance = None
+        if self.expert_mode:
+            try:
+                shap_values, shap_feature_importance = self._calculate_shap_values(X_train, X_test)
+            except Exception as e:
+                self.logger.warning(f"Erro ao calcular SHAP values: {e}")
+        
+        # Permutation importance
+        perm_importance = None
+        try:
+            perm_result = permutation_importance(self.model, X_test, y_test, 
+                                               n_repeats=10, random_state=42)
+            perm_importance = dict(zip(feature_names, perm_result.importances_mean))
+        except Exception as e:
+            self.logger.warning(f"Erro ao calcular permutation importance: {e}")
         
         return ModelPerformance(
             r2_score=r2,
@@ -182,8 +267,53 @@ class ElasticNetModelBuilder:
             mae=mae,
             mape=mape,
             cv_scores=cv_scores.tolist(),
-            feature_coefficients=feature_coefficients
+            feature_coefficients=feature_coefficients,
+            shap_values=shap_values,
+            shap_feature_importance=shap_feature_importance,
+            permutation_importance=perm_importance
         )
+    
+    def _get_feature_importance(self, feature_names: List[str]) -> Dict[str, float]:
+        """
+        Obtém importância das features baseada no tipo de modelo.
+        """
+        if hasattr(self.model, 'coef_'):
+            # Modelos lineares (ElasticNet)
+            return dict(zip(feature_names, self.model.coef_))
+        elif hasattr(self.model, 'feature_importances_'):
+            # Modelos baseados em árvore (XGBoost, GradientBoosting, RandomForest)
+            return dict(zip(feature_names, self.model.feature_importances_))
+        else:
+            # Fallback
+            return {name: 0.0 for name in feature_names}
+    
+    def _calculate_shap_values(self, X_train: pd.DataFrame, X_test: pd.DataFrame) -> Tuple[np.ndarray, Dict[str, float]]:
+        """
+        Calcula SHAP values para interpretabilidade do modelo.
+        """
+        # Usar amostra menor para evitar problemas de memória
+        sample_size = min(100, len(X_train))
+        X_train_sample = X_train.sample(n=sample_size, random_state=42)
+        
+        if self.model_type == 'elastic_net':
+            # Para modelos lineares
+            self.explainer = shap.LinearExplainer(self.model, X_train_sample)
+        else:
+            # Para modelos baseados em árvore
+            self.explainer = shap.TreeExplainer(self.model)
+        
+        # Calcular SHAP values
+        shap_values = self.explainer.shap_values(X_test.iloc[:min(50, len(X_test))])
+        
+        # Calcular importância média das features
+        if shap_values.ndim == 2:
+            shap_importance = np.abs(shap_values).mean(axis=0)
+        else:
+            shap_importance = np.abs(shap_values).mean()
+        
+        shap_feature_importance = dict(zip(X_test.columns, shap_importance))
+        
+        return shap_values, shap_feature_importance
     
     def build_model(self, df: pd.DataFrame, target_col: str = 'valor') -> ModelResult:
         """
@@ -206,7 +336,7 @@ class ElasticNetModelBuilder:
         model = self.train_model(X_train, y_train, best_params)
         
         # Avaliar modelo
-        performance = self.evaluate_model(X_test, y_test, X_train.columns.tolist())
+        performance = self.evaluate_model(X_train, X_test, y_test, X_train.columns.tolist())
         
         # Resumo do treinamento
         training_summary = {
@@ -221,7 +351,9 @@ class ElasticNetModelBuilder:
             model=model,
             performance=performance,
             best_params=best_params,
-            training_summary=training_summary
+            training_summary=training_summary,
+            model_type=self.model_type,
+            explainer=self.explainer
         )
     
     def save_model(self, model_result: ModelResult, filepath: str) -> None:
@@ -237,7 +369,9 @@ class ElasticNetModelBuilder:
             'scaler': self.scaler,
             'performance': model_result.performance,
             'best_params': model_result.best_params,
-            'training_summary': model_result.training_summary
+            'training_summary': model_result.training_summary,
+            'model_type': model_result.model_type,
+            'explainer': model_result.explainer
         }
         
         joblib.dump(model_data, filepath)
@@ -262,7 +396,9 @@ class ElasticNetModelBuilder:
             model=model_data['model'],
             performance=model_data['performance'],
             best_params=model_data['best_params'],
-            training_summary=model_data['training_summary']
+            training_summary=model_data['training_summary'],
+            model_type=model_data.get('model_type', 'elastic_net'),
+            explainer=model_data.get('explainer')
         )
     
     def predict(self, X: pd.DataFrame) -> np.ndarray:

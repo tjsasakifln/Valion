@@ -17,6 +17,8 @@ import threading
 from datetime import datetime
 import io
 from pathlib import Path
+import asyncio
+import websockets
 
 # Configuração da página
 st.set_page_config(
@@ -105,6 +107,10 @@ if 'evaluation_result' not in st.session_state:
     st.session_state.evaluation_result = None
 if 'uploaded_file_path' not in st.session_state:
     st.session_state.uploaded_file_path = None
+if 'websocket_connected' not in st.session_state:
+    st.session_state.websocket_connected = False
+if 'realtime_updates' not in st.session_state:
+    st.session_state.realtime_updates = []
 
 # Funções utilitárias
 def call_api(endpoint: str, method: str = "GET", data: Optional[Dict] = None, files: Optional[Dict] = None):
@@ -211,6 +217,77 @@ def get_evaluation_result(evaluation_id: str):
         Resultado da avaliação
     """
     return call_api(f"/evaluations/{evaluation_id}/result")
+
+def setup_websocket_connection(evaluation_id: str):
+    """
+    Configura conexão WebSocket para updates em tempo real.
+    
+    Args:
+        evaluation_id: ID da avaliação para monitorar
+    """
+    if st.session_state.websocket_connected:
+        return
+    
+    try:
+        import asyncio
+        import websockets
+        import threading
+        
+        def websocket_listener():
+            async def listen():
+                ws_url = f"{WS_BASE_URL}/ws/evaluations/{evaluation_id}"
+                try:
+                    async with websockets.connect(ws_url) as websocket:
+                        st.session_state.websocket_connected = True
+                        while True:
+                            message = await websocket.recv()
+                            data = json.loads(message)
+                            
+                            # Adicionar update à lista
+                            st.session_state.realtime_updates.append(data)
+                            
+                            # Manter apenas os últimos 50 updates
+                            if len(st.session_state.realtime_updates) > 50:
+                                st.session_state.realtime_updates = st.session_state.realtime_updates[-50:]
+                            
+                            # Forçar rerun do Streamlit se for update importante
+                            if data.get('type') == 'progress_update':
+                                st.rerun()
+                                
+                except Exception as e:
+                    st.session_state.websocket_connected = False
+                    st.error(f"Erro na conexão WebSocket: {e}")
+            
+            # Executar em loop assíncrono
+            try:
+                asyncio.run(listen())
+            except Exception as e:
+                st.session_state.websocket_connected = False
+        
+        # Iniciar listener em thread separada
+        if not st.session_state.websocket_connected:
+            thread = threading.Thread(target=websocket_listener, daemon=True)
+            thread.start()
+            
+    except Exception as e:
+        st.warning(f"WebSocket não disponível: {e}")
+
+def get_latest_realtime_status():
+    """
+    Obtém o status mais recente dos updates em tempo real.
+    
+    Returns:
+        Dict com status mais recente ou None
+    """
+    if not st.session_state.realtime_updates:
+        return None
+    
+    # Pegar o update mais recente que seja do tipo progress_update
+    for update in reversed(st.session_state.realtime_updates):
+        if update.get('type') == 'progress_update':
+            return update
+    
+    return None
 
 def create_performance_chart(performance_data: Dict[str, Any]):
     """
@@ -451,11 +528,27 @@ def show_evaluation_tracking_page():
     )
     
     if evaluation_id:
-        # Botão para atualizar status
-        if st.button("Atualizar Status"):
-            status = get_evaluation_status(evaluation_id)
-            if status:
-                st.session_state.evaluation_status = status
+        # Configurar WebSocket para updates em tempo real
+        setup_websocket_connection(evaluation_id)
+        
+        # Verificar updates em tempo real
+        realtime_status = get_latest_realtime_status()
+        if realtime_status:
+            st.session_state.evaluation_status = realtime_status
+        
+        # Botão para atualizar status (fallback)
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("Atualizar Status"):
+                status = get_evaluation_status(evaluation_id)
+                if status:
+                    st.session_state.evaluation_status = status
+        
+        with col1:
+            if st.session_state.websocket_connected:
+                st.success("🔗 Conectado - Updates em tempo real")
+            else:
+                st.info("📡 Tentando conectar para updates em tempo real...")
         
         # Mostrar status atual
         if st.session_state.evaluation_status:
