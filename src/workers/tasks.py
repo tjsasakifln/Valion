@@ -16,10 +16,13 @@ from pathlib import Path
 # Imports dos módulos core
 from src.core.data_loader import DataLoader
 from src.core.transformations import VariableTransformer
-from src.core.model_builder import ElasticNetModelBuilder
+from src.core.model_builder import ModelBuilder
 from src.core.nbr14653_validation import NBR14653Validator
 from src.core.results_generator import ResultsGenerator
 from src.config.settings import Settings
+from src.websocket.websocket_manager import websocket_manager, ProgressUpdate
+from src.database.database import get_database_manager
+import asyncio
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
@@ -71,6 +74,49 @@ def task_failure_handler(sender=None, task_id=None, exception=None, traceback=No
     """Handler executado quando a tarefa falha."""
     logger.error(f"Tarefa {task_id} falhou: {exception}")
 
+# Funções auxiliares
+def send_websocket_update(evaluation_id: str, status: str, phase: str, progress: float, message: str, metadata: Optional[Dict] = None):
+    """Envia atualização via WebSocket."""
+    try:
+        update = ProgressUpdate(
+            evaluation_id=evaluation_id,
+            status=status,
+            current_phase=phase,
+            progress=progress,
+            message=message,
+            timestamp=datetime.now().isoformat(),
+            metadata=metadata
+        )
+        
+        # Como o Celery roda de forma síncrona, precisa executar a função assíncrona
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(websocket_manager.send_progress_update(evaluation_id, update))
+        loop.close()
+    except Exception as e:
+        logger.warning(f"Erro ao enviar update WebSocket: {e}")
+
+def log_audit_trail(evaluation_id: str, operation: str, entity_type: str, entity_id: Optional[str] = None,
+                   old_values: Optional[Dict] = None, new_values: Optional[Dict] = None, 
+                   metadata: Optional[Dict] = None, user_id: str = "system"):
+    """Registra entrada na trilha de auditoria."""
+    try:
+        db_manager = get_database_manager()
+        with db_manager.get_session() as session:
+            db_manager.create_audit_trail(
+                session=session,
+                user_id=user_id,
+                operation=operation,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                old_values=old_values,
+                new_values=new_values,
+                metadata=metadata,
+                evaluation_id=evaluation_id
+            )
+    except Exception as e:
+        logger.warning(f"Erro ao registrar audit trail: {e}")
+
 # Tarefas Celery
 
 @app.task(bind=True, name='valion_worker.tasks.process_evaluation')
@@ -90,44 +136,129 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
     try:
         config = config or {}
         
+        # Auditoria: Início da avaliação
+        log_audit_trail(evaluation_id, 'start_evaluation', 'evaluation', evaluation_id,
+                       new_values={'file_path': file_path, 'target_column': target_column, 'config': config})
+        
         # Atualizar progresso
         self.update_state(state='PROGRESS', meta={'current': 0, 'total': 100, 'phase': 'Iniciando'})
+        send_websocket_update(evaluation_id, 'processing', 'Iniciando', 0.0, 'Avaliação iniciada')
         
         # Fase 1: Carregamento e validação
         self.update_state(state='PROGRESS', meta={'current': 10, 'total': 100, 'phase': 'Carregando dados'})
+        send_websocket_update(evaluation_id, 'processing', 'Carregando dados', 10.0, 'Carregando arquivo de dados')
         
         data_loader = DataLoader(config)
         raw_data = data_loader.load_data(file_path)
         
+        # Auditoria: Dados carregados
+        log_audit_trail(evaluation_id, 'data_ingested', 'data_loader', None,
+                       new_values={'file_path': file_path, 'rows': len(raw_data), 'columns': len(raw_data.columns)})
+        
         self.update_state(state='PROGRESS', meta={'current': 20, 'total': 100, 'phase': 'Validando dados'})
+        send_websocket_update(evaluation_id, 'processing', 'Validando dados', 20.0, 'Validando qualidade dos dados')
         
         validation_result = data_loader.validate_data(raw_data)
         if not validation_result.is_valid:
+            # Auditoria: Validação falhou
+            log_audit_trail(evaluation_id, 'validation_failed', 'data_validation', None,
+                           new_values={'errors': validation_result.errors, 'warnings': validation_result.warnings})
+            send_websocket_update(evaluation_id, 'failed', 'Validação falhou', 20.0, f"Erros: {validation_result.errors}")
             raise ValueError(f"Dados inválidos: {validation_result.errors}")
+        
+        # Auditoria: Validação bem-sucedida
+        log_audit_trail(evaluation_id, 'validation_passed', 'data_validation', None,
+                       new_values={'summary': validation_result.summary})
         
         cleaned_data = data_loader.clean_data(raw_data)
         
+        # Auditoria: Dados limpos
+        log_audit_trail(evaluation_id, 'data_cleaned', 'data_loader', None,
+                       new_values={'original_rows': len(raw_data), 'cleaned_rows': len(cleaned_data)})
+        
         # Fase 2: Transformações
         self.update_state(state='PROGRESS', meta={'current': 40, 'total': 100, 'phase': 'Transformando variáveis'})
+        send_websocket_update(evaluation_id, 'processing', 'Transformando variáveis', 40.0, 'Preparando features')
         
         transformer = VariableTransformer(config)
         transformation_result = transformer.transform_data(cleaned_data, target_column)
         
-        # Fase 3: Modelagem
-        self.update_state(state='PROGRESS', meta={'current': 60, 'total': 100, 'phase': 'Treinando modelo'})
+        # Auditoria: Transformações aplicadas
+        log_audit_trail(evaluation_id, 'data_transformed', 'variable_transformer', None,
+                       new_values={'transformations_applied': transformation_result.transformations_applied,
+                                  'original_features': len(cleaned_data.columns),
+                                  'transformed_features': len(transformation_result.transformed_data.columns)})
         
-        model_builder = ElasticNetModelBuilder(config)
-        model_result = model_builder.build_model(transformation_result.transformed_data, target_column)
+        # Fase 3: Modelagem
+        expert_mode = config.get('expert_mode', False)
+        model_type = config.get('model_type', 'elastic_net')
+        
+        if expert_mode:
+            self.update_state(state='PROGRESS', meta={'current': 60, 'total': 100, 'phase': 'Treinando modelo (Modo Especialista)'})
+            send_websocket_update(evaluation_id, 'processing', 'Treinando modelo avançado', 60.0, f'Modo especialista: {model_type} com SHAP obrigatório')
+        else:
+            self.update_state(state='PROGRESS', meta={'current': 60, 'total': 100, 'phase': 'Treinando modelo'})
+            send_websocket_update(evaluation_id, 'processing', 'Treinando modelo', 60.0, 'Treinando modelo Elastic Net')
+        
+        model_builder = ModelBuilder(config)
+        
+        try:
+            model_result = model_builder.build_model(transformation_result.transformed_data, target_column)
+            
+            # Verificação crítica para modo especialista
+            if expert_mode:
+                if not model_result.performance.shap_feature_importance:
+                    error_msg = "ERRO CRÍTICO: Modo especialista requer SHAP values - falha na interpretabilidade"
+                    log_audit_trail(evaluation_id, 'expert_mode_failed', 'model_builder', None,
+                                   new_values={'error': error_msg, 'model_type': model_type})
+                    send_websocket_update(evaluation_id, 'failed', 'Erro no modo especialista', 60.0, error_msg)
+                    raise ValueError(error_msg)
+                
+                # Log de sucesso no modo especialista
+                log_audit_trail(evaluation_id, 'expert_mode_success', 'model_builder', None,
+                               new_values={'model_type': model_type, 'shap_available': True,
+                                          'interpretability_guaranteed': True})
+                send_websocket_update(evaluation_id, 'processing', 'SHAP garantido', 65.0, 'Interpretabilidade glass-box confirmada')
+            
+        except Exception as e:
+            if expert_mode:
+                error_msg = f"Falha crítica no modo especialista: {str(e)}"
+                log_audit_trail(evaluation_id, 'expert_mode_critical_failure', 'model_builder', None,
+                               new_values={'error': error_msg, 'model_type': model_type})
+                send_websocket_update(evaluation_id, 'failed', 'Erro crítico', 60.0, error_msg)
+            raise
+        
+        # Auditoria: Modelo treinado
+        audit_data = {
+            'model_type': model_result.model_type,
+            'r2_score': model_result.performance.r2_score,
+            'rmse': model_result.performance.rmse, 
+            'best_params': model_result.best_params,
+            'expert_mode': expert_mode
+        }
+        
+        if expert_mode:
+            audit_data['shap_guaranteed'] = bool(model_result.performance.shap_feature_importance)
+            audit_data['interpretability_level'] = 'complete'
+        
+        log_audit_trail(evaluation_id, 'model_trained', 'model_builder', None, new_values=audit_data)
         
         # Fase 4: Validação NBR
         self.update_state(state='PROGRESS', meta={'current': 80, 'total': 100, 'phase': 'Validando NBR 14653'})
+        send_websocket_update(evaluation_id, 'processing', 'Validando NBR 14653', 80.0, 'Executando testes estatísticos')
         
         validator = NBR14653Validator(config)
         X_train, X_test, y_train, y_test = model_builder.prepare_data(transformation_result.transformed_data)
         nbr_result = validator.validate_model(model_result.model, X_train, X_test, y_train, y_test)
         
+        # Auditoria: Validação NBR
+        log_audit_trail(evaluation_id, 'nbr_validation_completed', 'nbr_validator', None,
+                       new_values={'grade': nbr_result.grade, 'compliance_score': nbr_result.compliance_score,
+                                  'tests_passed': nbr_result.tests_passed})
+        
         # Fase 5: Geração de relatório
         self.update_state(state='PROGRESS', meta={'current': 90, 'total': 100, 'phase': 'Gerando relatório'})
+        send_websocket_update(evaluation_id, 'processing', 'Gerando relatório', 90.0, 'Consolidando resultados')
         
         results_generator = ResultsGenerator(config)
         report = results_generator.generate_full_report(
@@ -144,7 +275,17 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
         model_builder.save_model(model_result, model_path)
         results_generator.save_report(report, report_path)
         
+        # Auditoria: Artefatos salvos
+        log_audit_trail(evaluation_id, 'artifacts_saved', 'file_system', None,
+                       new_values={'model_path': model_path, 'report_path': report_path})
+        
         self.update_state(state='PROGRESS', meta={'current': 100, 'total': 100, 'phase': 'Concluído'})
+        send_websocket_update(evaluation_id, 'completed', 'Avaliação concluída', 100.0, 'Relatório gerado com sucesso')
+        
+        # Auditoria: Avaliação finalizada
+        log_audit_trail(evaluation_id, 'evaluation_completed', 'evaluation', evaluation_id,
+                       new_values={'final_r2_score': model_result.performance.r2_score,
+                                  'nbr_grade': nbr_result.grade, 'compliance_score': nbr_result.compliance_score})
         
         return {
             'evaluation_id': evaluation_id,
@@ -159,6 +300,14 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
         
     except Exception as e:
         logger.error(f"Erro na avaliação {evaluation_id}: {str(e)}")
+        
+        # Auditoria: Erro na avaliação
+        log_audit_trail(evaluation_id, 'evaluation_failed', 'evaluation', evaluation_id,
+                       new_values={'error': str(e), 'error_type': type(e).__name__})
+        
+        # WebSocket: Notificar erro
+        send_websocket_update(evaluation_id, 'failed', 'Erro na avaliação', 0.0, f"Erro: {str(e)}")
+        
         self.update_state(state='FAILURE', meta={'error': str(e)})
         raise
 
@@ -224,7 +373,7 @@ def train_model(self, data_dict: Dict[str, Any], target_column: str = "valor", c
         self.update_state(state='PROGRESS', meta={'current': 50, 'total': 100, 'phase': 'Treinando modelo'})
         
         # Treinar modelo
-        model_builder = ElasticNetModelBuilder(config)
+        model_builder = ModelBuilder(config)
         model_result = model_builder.build_model(transformation_result.transformed_data, target_column)
         
         self.update_state(state='PROGRESS', meta={'current': 75, 'total': 100, 'phase': 'Validando modelo'})
@@ -306,7 +455,7 @@ def make_prediction(self, model_path: str, features: Dict[str, Any]):
         self.update_state(state='PROGRESS', meta={'current': 50, 'total': 100, 'phase': 'Fazendo predição'})
         
         # Carregar modelo
-        model_builder = ElasticNetModelBuilder({})
+        model_builder = ModelBuilder({})
         model_result = model_builder.load_model(model_path)
         
         # Converter features para DataFrame
@@ -337,6 +486,191 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'worker_id': os.getenv('HOSTNAME', 'unknown')
     }
+
+@app.task(bind=True, name='valion_worker.tasks.continue_evaluation_step')
+def continue_evaluation_step(self, evaluation_id: str, step: str, approved: bool, 
+                            modifications: Optional[Dict[str, Any]] = None,
+                            user_feedback: Optional[str] = None):
+    """
+    Continua avaliação após aprovação do usuário.
+    
+    Args:
+        evaluation_id: ID da avaliação
+        step: Etapa aprovada/rejeitada
+        approved: Se a etapa foi aprovada
+        modifications: Modificações solicitadas pelo usuário
+        user_feedback: Feedback do usuário
+        
+    Returns:
+        Resultado da continuidade
+    """
+    try:
+        # Log da aprovação
+        log_audit_trail(evaluation_id, 'user_approval', 'interactive_pipeline', step,
+                       new_values={'approved': approved, 'step': step, 'user_feedback': user_feedback,
+                                  'modifications': modifications})
+        
+        if approved:
+            self.update_state(state='PROGRESS', meta={'current': 50, 'total': 100, 'phase': f'Aplicando {step}'})
+            send_websocket_update(evaluation_id, 'processing', f'Aplicando {step}', 50.0, 
+                                f'Usuário aprovou {step} - continuando')
+            
+            # Aplicar modificações se fornecidas
+            if modifications:
+                # Implementar lógica para aplicar modificações
+                log_audit_trail(evaluation_id, 'modifications_applied', 'interactive_pipeline', step,
+                               new_values={'modifications': modifications})
+            
+            return {
+                'evaluation_id': evaluation_id,
+                'step': step,
+                'approved': True,
+                'status': 'continued',
+                'timestamp': datetime.now().isoformat()
+            }
+        else:
+            self.update_state(state='PROGRESS', meta={'current': 25, 'total': 100, 'phase': f'Ajustando {step}'})
+            send_websocket_update(evaluation_id, 'processing', f'Ajustando {step}', 25.0, 
+                                f'Usuário rejeitou {step} - ajustando abordagem')
+            
+            # Implementar lógica alternativa baseada na rejeição
+            return {
+                'evaluation_id': evaluation_id,
+                'step': step,
+                'approved': False,
+                'status': 'alternative_approach',
+                'timestamp': datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        logger.error(f"Erro na continuação da avaliação {evaluation_id}: {str(e)}")
+        log_audit_trail(evaluation_id, 'continuation_failed', 'interactive_pipeline', step,
+                       new_values={'error': str(e), 'step': step})
+        self.update_state(state='FAILURE', meta={'error': str(e)})
+        raise
+
+@app.task(bind=True, name='valion_worker.tasks.run_data_validation')
+def run_data_validation(self, evaluation_id: str, file_path: str, config: Optional[Dict[str, Any]] = None):
+    """
+    Executa apenas a validação de dados como etapa isolada.
+    """
+    try:
+        config = config or {}
+        
+        self.update_state(state='PROGRESS', meta={'current': 50, 'total': 100, 'phase': 'Validando dados'})
+        send_websocket_update(evaluation_id, 'processing', 'Validando dados', 50.0, 'Executando validação')
+        
+        data_loader = DataLoader(config)
+        raw_data = data_loader.load_data(file_path)
+        validation_result = data_loader.validate_data(raw_data)
+        
+        if not validation_result.is_valid:
+            send_websocket_update(evaluation_id, 'awaiting_approval', 'Validação falhou', 50.0, 
+                                'Dados inválidos - aprovação necessária',
+                                {'step': 'validation', 'errors': validation_result.errors})
+        else:
+            send_websocket_update(evaluation_id, 'completed', 'Validação concluída', 100.0, 'Dados válidos')
+        
+        return {
+            'evaluation_id': evaluation_id,
+            'validation_result': validation_result.__dict__,
+            'data_shape': raw_data.shape,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na validação {evaluation_id}: {str(e)}")
+        self.update_state(state='FAILURE', meta={'error': str(e)})
+        raise
+
+@app.task(bind=True, name='valion_worker.tasks.run_transformations')
+def run_transformations(self, evaluation_id: str, data_dict: Dict[str, Any], target_column: str,
+                       config: Optional[Dict[str, Any]] = None):
+    """
+    Executa transformações como etapa isolada.
+    """
+    try:
+        config = config or {}
+        
+        self.update_state(state='PROGRESS', meta={'current': 50, 'total': 100, 'phase': 'Transformando dados'})
+        send_websocket_update(evaluation_id, 'processing', 'Transformando dados', 50.0, 'Aplicando transformações')
+        
+        df = pd.DataFrame(data_dict)
+        transformer = VariableTransformer(config)
+        transformation_result = transformer.transform_data(df, target_column)
+        
+        # Sugerir transformações para aprovação do usuário
+        suggestions = {
+            'transformations_applied': transformation_result.transformations_applied,
+            'new_features_count': len(transformation_result.feature_names),
+            'suggested_removals': [],  # Features sugeridas para remoção
+            'alternative_approaches': []  # Abordagens alternativas
+        }
+        
+        send_websocket_update(evaluation_id, 'awaiting_approval', 'Transformações prontas', 75.0, 
+                            'Aprovação de transformações necessária',
+                            {'step': 'transformations', 'suggestions': suggestions})
+        
+        return {
+            'evaluation_id': evaluation_id,
+            'transformation_result': transformation_result.__dict__,
+            'suggestions': suggestions,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro nas transformações {evaluation_id}: {str(e)}")
+        self.update_state(state='FAILURE', meta={'error': str(e)})
+        raise
+
+@app.task(bind=True, name='valion_worker.tasks.run_outlier_analysis')
+def run_outlier_analysis(self, evaluation_id: str, data_dict: Dict[str, Any], target_column: str,
+                        config: Optional[Dict[str, Any]] = None):
+    """
+    Executa análise de outliers como etapa isolada.
+    """
+    try:
+        config = config or {}
+        
+        self.update_state(state='PROGRESS', meta={'current': 50, 'total': 100, 'phase': 'Analisando outliers'})
+        send_websocket_update(evaluation_id, 'processing', 'Analisando outliers', 50.0, 'Detectando outliers')
+        
+        df = pd.DataFrame(data_dict)
+        
+        # Detectar outliers (implementação básica)
+        Q1 = df[target_column].quantile(0.25)
+        Q3 = df[target_column].quantile(0.75)
+        IQR = Q3 - Q1
+        
+        outlier_threshold_low = Q1 - 1.5 * IQR
+        outlier_threshold_high = Q3 + 1.5 * IQR
+        
+        outliers = df[(df[target_column] < outlier_threshold_low) | 
+                     (df[target_column] > outlier_threshold_high)]
+        
+        outlier_info = {
+            'total_outliers': len(outliers),
+            'percentage': (len(outliers) / len(df)) * 100,
+            'threshold_low': outlier_threshold_low,
+            'threshold_high': outlier_threshold_high,
+            'outlier_indices': outliers.index.tolist()[:10],  # Primeiros 10
+            'removal_recommendation': 'remove' if len(outliers) < len(df) * 0.05 else 'keep'
+        }
+        
+        send_websocket_update(evaluation_id, 'awaiting_approval', 'Outliers detectados', 75.0, 
+                            f'{len(outliers)} outliers encontrados - aprovação necessária',
+                            {'step': 'outliers', 'details': outlier_info})
+        
+        return {
+            'evaluation_id': evaluation_id,
+            'outlier_analysis': outlier_info,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na análise de outliers {evaluation_id}: {str(e)}")
+        self.update_state(state='FAILURE', meta={'error': str(e)})
+        raise
 
 @app.task(name='valion_worker.tasks.cleanup_old_files')
 def cleanup_old_files(days_old: int = 7):

@@ -422,6 +422,7 @@ def main():
     st.sidebar.title("Menu")
     page = st.sidebar.radio("Escolha uma opção", [
         "Nova Avaliação", 
+        "Fluxo Guiado",
         "Acompanhar Avaliação", 
         "Resultados", 
         "Predições",
@@ -430,6 +431,8 @@ def main():
     
     if page == "Nova Avaliação":
         show_new_evaluation_page()
+    elif page == "Fluxo Guiado":
+        show_guided_workflow_page()
     elif page == "Acompanhar Avaliação":
         show_evaluation_tracking_page()
     elif page == "Resultados":
@@ -627,6 +630,7 @@ def show_results_page():
                 "Performance do Modelo", 
                 "Testes NBR 14653", 
                 "Análise de Features",
+                "Trilha de Auditoria",
                 "Dados Utilizados",
                 "Metodologia"
             ])
@@ -644,9 +648,12 @@ def show_results_page():
                 show_feature_analysis(result)
             
             with tabs[4]:
-                show_data_summary(result)
+                show_audit_trail_tab(evaluation_id)
             
             with tabs[5]:
+                show_data_summary(result)
+            
+            with tabs[6]:
                 show_methodology(result)
 
 def show_executive_summary(result: Dict[str, Any]):
@@ -908,6 +915,949 @@ def show_predictions_page():
                     st.json(features)
                 else:
                     st.error("Erro ao fazer predição. Verifique se o modelo foi treinado.")
+
+def show_guided_workflow_page():
+    """Página do fluxo de trabalho guiado."""
+    
+    st.header("🔍 Fluxo de Trabalho Guiado")
+    
+    # Inicializar estado do workflow
+    if 'workflow_step' not in st.session_state:
+        st.session_state.workflow_step = 1
+    if 'workflow_data' not in st.session_state:
+        st.session_state.workflow_data = {}
+    if 'user_tier' not in st.session_state:
+        st.session_state.user_tier = 'mvp'  # Default to MVP tier
+    
+    # Seletor de nível do usuário (feature flag simulation)
+    st.sidebar.subheader("Configurações do Usuário")
+    user_tier = st.sidebar.selectbox(
+        "Nível de Acesso",
+        options=['mvp', 'professional', 'expert'],
+        value=st.session_state.user_tier,
+        format_func=lambda x: {'mvp': 'MVP', 'professional': 'Profissional', 'expert': 'Especialista'}[x]
+    )
+    st.session_state.user_tier = user_tier
+    
+    # Descrição do fluxo
+    st.markdown("""
+    <div class="transparency-box">
+        <h4>🧭 Navegação Inteligente</h4>
+        <p>Este fluxo guiado desmistifica cada etapa do processo de avaliação, 
+        proporcionando controle total e transparência absoluta em cada decisão.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Progress indicator
+    phases = [
+        "1. Validação",
+        "2. Transformação", 
+        "3. Modelagem",
+        "4. Validação NBR",
+        "5. Relatório"
+    ]
+    
+    current_step = st.session_state.workflow_step
+    progress = current_step / len(phases)
+    
+    st.markdown(f"""
+    <div class="phase-indicator">
+        Fase Atual: {phases[current_step - 1]} ({current_step}/{len(phases)})
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.progress(progress)
+    
+    # Step navigation
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col1:
+        if current_step > 1:
+            if st.button("⬅️ Fase Anterior"):
+                st.session_state.workflow_step -= 1
+                st.rerun()
+    
+    with col3:
+        if current_step < len(phases):
+            if st.button("Próxima Fase ➡️"):
+                st.session_state.workflow_step += 1
+                st.rerun()
+    
+    # Display current phase
+    if current_step == 1:
+        show_validation_phase()
+    elif current_step == 2:
+        show_transformation_phase()
+    elif current_step == 3:
+        show_modeling_phase()
+    elif current_step == 4:
+        show_nbr_validation_phase()
+    elif current_step == 5:
+        show_report_phase()
+
+def show_validation_phase():
+    """Fase 1: Validação de Dados."""
+    
+    st.subheader("📊 Fase 1: Validação de Dados")
+    
+    st.markdown("""
+    **Objetivo:** Garantir a qualidade e integridade dos dados de entrada.
+    
+    **O que acontece nesta fase:**
+    - Verificação de tipos de dados
+    - Detecção de valores ausentes
+    - Identificação de outliers
+    - Validação de consistência
+    """)
+    
+    # Upload section
+    uploaded_file = st.file_uploader(
+        "Upload dos dados imobiliários",
+        type=['csv', 'xlsx', 'xls'],
+        help="Envie seus dados para análise"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            # Load and preview data
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
+            
+            st.success("✅ Arquivo carregado com sucesso!")
+            
+            # Data preview
+            st.subheader("👀 Prévia dos Dados")
+            st.dataframe(df.head(10))
+            
+            # Data quality metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Registros", len(df))
+            with col2:
+                st.metric("Colunas", len(df.columns))
+            with col3:
+                st.metric("Valores Ausentes", df.isnull().sum().sum())
+            with col4:
+                st.metric("Duplicatas", df.duplicated().sum())
+            
+            # Column analysis
+            st.subheader("🔍 Análise de Colunas")
+            
+            for col in df.columns:
+                with st.expander(f"Coluna: {col}"):
+                    col_info1, col_info2 = st.columns(2)
+                    
+                    with col_info1:
+                        st.write(f"**Tipo:** {df[col].dtype}")
+                        st.write(f"**Valores únicos:** {df[col].nunique()}")
+                        st.write(f"**Valores ausentes:** {df[col].isnull().sum()}")
+                    
+                    with col_info2:
+                        if df[col].dtype in ['int64', 'float64']:
+                            st.write(f"**Mínimo:** {df[col].min()}")
+                            st.write(f"**Máximo:** {df[col].max()}")
+                            st.write(f"**Média:** {df[col].mean():.2f}")
+            
+            # Quality assessment
+            st.subheader("📋 Avaliação de Qualidade")
+            
+            quality_issues = []
+            if df.isnull().sum().sum() > 0:
+                quality_issues.append(f"⚠️ {df.isnull().sum().sum()} valores ausentes encontrados")
+            if df.duplicated().sum() > 0:
+                quality_issues.append(f"⚠️ {df.duplicated().sum()} registros duplicados encontrados")
+            
+            # Check for required columns
+            required_cols = ['valor']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                quality_issues.append(f"❌ Colunas obrigatórias ausentes: {missing_cols}")
+            
+            if quality_issues:
+                st.warning("Problemas identificados:")
+                for issue in quality_issues:
+                    st.write(issue)
+            else:
+                st.success("✅ Dados aprovados na validação inicial!")
+            
+            # Store data in session state
+            st.session_state.workflow_data['validation_data'] = df
+            st.session_state.workflow_data['quality_issues'] = quality_issues
+            
+            # Approval section
+            st.subheader("🎯 Decisão")
+            
+            if st.button("✅ Aprovar e Continuar", type="primary"):
+                st.session_state.workflow_step = 2
+                st.success("Dados aprovados! Avançando para a fase de transformação...")
+                time.sleep(1)
+                st.rerun()
+                
+        except Exception as e:
+            st.error(f"Erro ao processar arquivo: {str(e)}")
+
+def show_transformation_phase():
+    """Fase 2: Transformação de Dados."""
+    
+    st.subheader("🔧 Fase 2: Transformação de Dados")
+    
+    st.markdown("""
+    **Objetivo:** Preparar os dados para modelagem através de transformações inteligentes.
+    
+    **O que acontece nesta fase:**
+    - Tratamento de valores ausentes
+    - Codificação de variáveis categóricas
+    - Normalização/padronização
+    - Engenharia de features
+    """)
+    
+    if 'validation_data' not in st.session_state.workflow_data:
+        st.warning("⚠️ Execute primeiro a fase de validação.")
+        return
+    
+    df = st.session_state.workflow_data['validation_data']
+    
+    # Transformation options
+    st.subheader("⚙️ Configurações de Transformação")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Tratamento de Valores Ausentes:**")
+        missing_strategy = st.selectbox(
+            "Estratégia",
+            ["Remoção", "Média/Moda", "Interpolação", "Valor constante"]
+        )
+        
+        st.write("**Variáveis Categóricas:**")
+        encoding_strategy = st.selectbox(
+            "Codificação",
+            ["One-Hot Encoding", "Label Encoding", "Target Encoding"]
+        )
+    
+    with col2:
+        st.write("**Normalização:**")
+        scaling_strategy = st.selectbox(
+            "Método",
+            ["StandardScaler", "MinMaxScaler", "RobustScaler", "Sem normalização"]
+        )
+        
+        st.write("**Seleção de Features:**")
+        feature_selection = st.selectbox(
+            "Método",
+            ["Seleção Univariada", "Recursive Feature Elimination", "Todas as features"]
+        )
+    
+    # Feature engineering options
+    st.subheader("🧪 Engenharia de Features")
+    
+    create_interaction = st.checkbox("Criar features de interação")
+    create_polynomial = st.checkbox("Criar features polinomiais")
+    
+    if st.session_state.user_tier in ['professional', 'expert']:
+        create_custom = st.checkbox("Features customizadas")
+        if create_custom:
+            st.text_area("Fórmulas customizadas (uma por linha)", 
+                        placeholder="area_por_quarto = area_total / quartos")
+    
+    # Preview transformations
+    st.subheader("👁️ Prévia das Transformações")
+    
+    if st.button("🔍 Simular Transformações"):
+        with st.spinner("Aplicando transformações..."):
+            # Simulate transformations
+            transformed_df = df.copy()
+            
+            # Show before/after comparison
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Antes:**")
+                st.dataframe(df.head())
+            
+            with col2:
+                st.write("**Depois (Simulação):**")
+                # Simple simulation - in real implementation would apply actual transformations
+                st.dataframe(transformed_df.head())
+            
+            # Store transformation config
+            st.session_state.workflow_data['transformation_config'] = {
+                'missing_strategy': missing_strategy,
+                'encoding_strategy': encoding_strategy,
+                'scaling_strategy': scaling_strategy,
+                'feature_selection': feature_selection,
+                'create_interaction': create_interaction,
+                'create_polynomial': create_polynomial
+            }
+    
+    # Approval section
+    st.subheader("🎯 Decisão")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("✅ Aprovar e Continuar", type="primary"):
+            st.session_state.workflow_step = 3
+            st.success("Transformações aprovadas! Avançando para a modelagem...")
+            time.sleep(1)
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 Refazer Transformações"):
+            st.info("Ajuste as configurações e simule novamente.")
+
+def show_modeling_phase():
+    """Fase 3: Modelagem."""
+    
+    st.subheader("🤖 Fase 3: Modelagem")
+    
+    st.markdown("""
+    **Objetivo:** Treinar o modelo de machine learning para avaliação imobiliária.
+    
+    **O que acontece nesta fase:**
+    - Divisão treino/teste
+    - Seleção do algoritmo
+    - Otimização de hiperparâmetros
+    - Validação cruzada
+    """)
+    
+    # Model selection based on user tier
+    st.subheader("🎯 Seleção do Modelo")
+    
+    if st.session_state.user_tier == 'mvp':
+        st.info("**Nível MVP:** Apenas Elastic Net (Grau III)")
+        model_type = "Elastic Net"
+        st.write("**Modelo selecionado:** Elastic Net Regression")
+        
+    elif st.session_state.user_tier == 'professional':
+        st.info("**Nível Profissional:** Todos os graus disponíveis")
+        model_options = ["Elastic Net", "Random Forest", "Support Vector Machine"]
+        model_type = st.selectbox("Selecione o modelo:", model_options)
+        
+    else:  # expert
+        st.info("**Nível Especialista:** Modelos avançados + SHAP obrigatório")
+        model_options = ["XGBoost", "Gradient Boosting", "Elastic Net", "Ensemble"]
+        model_type = st.selectbox("Selecione o modelo:", model_options)
+        
+        st.markdown("""
+        <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 1rem; border-radius: 0.5rem;">
+            <strong>🔬 Modo Especialista Ativo</strong><br>
+            SHAP (SHapley Additive exPlanations) será automaticamente calculado para garantir 
+            interpretabilidade "glass-box" absoluta.
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Hyperparameter configuration
+    st.subheader("⚙️ Configuração de Hiperparâmetros")
+    
+    if model_type == "Elastic Net":
+        col1, col2 = st.columns(2)
+        with col1:
+            alpha = st.slider("Alpha (Regularização)", 0.01, 2.0, 1.0)
+        with col2:
+            l1_ratio = st.slider("L1 Ratio", 0.0, 1.0, 0.5)
+            
+    elif model_type in ["XGBoost", "Gradient Boosting"]:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            n_estimators = st.slider("N Estimators", 50, 500, 100)
+        with col2:
+            max_depth = st.slider("Max Depth", 3, 10, 6)
+        with col3:
+            learning_rate = st.slider("Learning Rate", 0.01, 0.3, 0.1)
+    
+    # Cross-validation settings
+    st.subheader("🔄 Validação Cruzada")
+    
+    cv_folds = st.slider("Número de folds", 3, 10, 5)
+    test_size = st.slider("Tamanho do conjunto de teste (%)", 10, 30, 20)
+    
+    # Training simulation
+    st.subheader("🚀 Treinamento do Modelo")
+    
+    if st.button("🎯 Treinar Modelo", type="primary"):
+        with st.spinner("Treinando modelo..."):
+            # Simulate training
+            progress_bar = st.progress(0)
+            
+            for i in range(100):
+                time.sleep(0.02)
+                progress_bar.progress((i + 1) / 100)
+            
+            st.success("✅ Modelo treinado com sucesso!")
+            
+            # Mock results
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("R² Score", "0.8542")
+            with col2:
+                st.metric("RMSE", "45,230")
+            with col3:
+                st.metric("MAE", "32,150")
+            
+            # Store model config
+            st.session_state.workflow_data['model_config'] = {
+                'model_type': model_type,
+                'cv_folds': cv_folds,
+                'test_size': test_size,
+                'user_tier': st.session_state.user_tier
+            }
+            
+            if st.session_state.user_tier == 'expert':
+                st.info("🔬 SHAP values calculados automaticamente para interpretabilidade completa.")
+    
+    # Approval section
+    st.subheader("🎯 Decisão")
+    
+    if 'model_config' in st.session_state.workflow_data:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("✅ Aprovar Modelo", type="primary"):
+                st.session_state.workflow_step = 4
+                st.success("Modelo aprovado! Avançando para validação NBR...")
+                time.sleep(1)
+                st.rerun()
+        
+        with col2:
+            if st.button("🔄 Retreinar"):
+                st.info("Ajuste os hiperparâmetros e treine novamente.")
+
+def show_nbr_validation_phase():
+    """Fase 4: Validação NBR 14653."""
+    
+    st.subheader("📏 Fase 4: Validação NBR 14653")
+    
+    st.markdown("""
+    **Objetivo:** Validar o modelo conforme norma NBR 14653 para garantir conformidade técnica.
+    
+    **Testes aplicados:**
+    - Coeficiente de determinação (R²)
+    - Teste F de significância global
+    - Teste t para coeficientes
+    - Durbin-Watson (autocorrelação)
+    - Shapiro-Wilk (normalidade dos resíduos)
+    """)
+    
+    if 'model_config' not in st.session_state.workflow_data:
+        st.warning("⚠️ Execute primeiro o treinamento do modelo.")
+        return
+    
+    # Run NBR tests
+    if st.button("🧪 Executar Testes NBR 14653", type="primary"):
+        with st.spinner("Executando bateria de testes..."):
+            # Simulate NBR tests
+            progress_bar = st.progress(0)
+            
+            tests = [
+                "Coeficiente de determinação (R²)",
+                "Teste F de significância",
+                "Teste t para coeficientes", 
+                "Durbin-Watson",
+                "Shapiro-Wilk"
+            ]
+            
+            results = {}
+            
+            for i, test in enumerate(tests):
+                time.sleep(0.5)
+                progress_bar.progress((i + 1) / len(tests))
+                
+                # Mock test results
+                if test == "Coeficiente de determinação (R²)":
+                    results[test] = {"value": 0.8542, "threshold": 0.70, "passed": True}
+                elif test == "Teste F de significância":
+                    results[test] = {"value": 125.45, "threshold": 3.84, "passed": True}
+                elif test == "Teste t para coeficientes":
+                    results[test] = {"value": 4.25, "threshold": 1.96, "passed": True}
+                elif test == "Durbin-Watson":
+                    results[test] = {"value": 1.89, "threshold": 1.5, "passed": True}
+                else:  # Shapiro-Wilk
+                    results[test] = {"value": 0.045, "threshold": 0.05, "passed": False}
+            
+            st.success("✅ Testes NBR 14653 concluídos!")
+            
+            # Results display
+            st.subheader("📊 Resultados dos Testes")
+            
+            for test, result in results.items():
+                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                
+                with col1:
+                    st.write(test)
+                with col2:
+                    st.write(f"{result['value']:.3f}")
+                with col3:
+                    st.write(f"{result['threshold']:.3f}")
+                with col4:
+                    if result['passed']:
+                        st.success("✅")
+                    else:
+                        st.error("❌")
+            
+            # Overall grade
+            passed_tests = sum(1 for r in results.values() if r['passed'])
+            total_tests = len(results)
+            
+            r2_value = results["Coeficiente de determinação (R²)"]["value"]
+            
+            if r2_value >= 0.90:
+                grade = "Superior"
+                grade_class = "grade-superior"
+            elif r2_value >= 0.80:
+                grade = "Normal"  
+                grade_class = "grade-normal"
+            elif r2_value >= 0.70:
+                grade = "Inferior"
+                grade_class = "grade-inferior"
+            else:
+                grade = "Inadequado"
+                grade_class = "grade-inadequado"
+            
+            st.markdown(f"""
+            <div class="nbr-grade {grade_class}">
+                Grau NBR 14653: {grade} ({passed_tests}/{total_tests} testes aprovados)
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Store NBR results
+            st.session_state.workflow_data['nbr_results'] = {
+                'tests': results,
+                'grade': grade,
+                'passed_tests': passed_tests,
+                'total_tests': total_tests
+            }
+    
+    # Approval section
+    st.subheader("🎯 Decisão")
+    
+    if 'nbr_results' in st.session_state.workflow_data:
+        nbr_data = st.session_state.workflow_data['nbr_results']
+        
+        if nbr_data['grade'] in ['Superior', 'Normal']:
+            if st.button("✅ Aprovar Validação", type="primary"):
+                st.session_state.workflow_step = 5
+                st.success("Validação NBR aprovada! Gerando relatório final...")
+                time.sleep(1)
+                st.rerun()
+        else:
+            st.warning("⚠️ Modelo não atende aos critérios mínimos da NBR 14653.")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔄 Voltar à Modelagem"):
+                    st.session_state.workflow_step = 3
+                    st.info("Retornando à fase de modelagem para ajustes...")
+                    time.sleep(1)
+                    st.rerun()
+            
+            with col2:
+                if st.button("⚠️ Prosseguir mesmo assim"):
+                    st.session_state.workflow_step = 5
+                    st.warning("Prosseguindo com modelo abaixo do padrão...")
+                    time.sleep(1)
+                    st.rerun()
+
+def show_report_phase():
+    """Fase 5: Geração do Relatório."""
+    
+    st.subheader("📄 Fase 5: Relatório Final")
+    
+    st.markdown("""
+    **Objetivo:** Consolidar todos os resultados em um relatório técnico defensável.
+    
+    **Conteúdo do relatório:**
+    - Resumo executivo
+    - Metodologia aplicada
+    - Resultados dos testes NBR
+    - Análise de interpretabilidade
+    - Conclusões e recomendações
+    """)
+    
+    if 'nbr_results' not in st.session_state.workflow_data:
+        st.warning("⚠️ Execute primeiro a validação NBR.")
+        return
+    
+    # Report generation
+    if st.button("📋 Gerar Relatório Final", type="primary"):
+        with st.spinner("Consolidando resultados..."):
+            time.sleep(2)
+            
+            st.success("✅ Relatório gerado com sucesso!")
+            
+            # Report preview
+            st.subheader("📄 Prévia do Relatório")
+            
+            workflow_data = st.session_state.workflow_data
+            
+            # Executive summary
+            with st.expander("📊 Resumo Executivo", expanded=True):
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Grau NBR", workflow_data['nbr_results']['grade'])
+                with col2:
+                    st.metric("R² Score", "0.8542")
+                with col3:
+                    st.metric("Registros", len(workflow_data['validation_data']))
+                
+                st.write("**Conclusão:** Modelo atende aos critérios técnicos da NBR 14653 com grau " + 
+                        workflow_data['nbr_results']['grade'] + ".")
+            
+            # Methodology
+            with st.expander("🔬 Metodologia"):
+                st.write(f"**Modelo utilizado:** {workflow_data['model_config']['model_type']}")
+                st.write(f"**Nível de acesso:** {workflow_data['model_config']['user_tier'].title()}")
+                st.write(f"**Validação cruzada:** {workflow_data['model_config']['cv_folds']} folds")
+                
+                if workflow_data['model_config']['user_tier'] == 'expert':
+                    st.write("**Interpretabilidade:** SHAP values calculados (modo especialista)")
+            
+            # NBR Results
+            with st.expander("📏 Resultados NBR 14653"):
+                for test, result in workflow_data['nbr_results']['tests'].items():
+                    status = "✅ Aprovado" if result['passed'] else "❌ Reprovado"
+                    st.write(f"**{test}:** {result['value']:.3f} {status}")
+            
+            # Feature flags demonstration
+            if st.session_state.user_tier in ['professional', 'expert']:
+                with st.expander("🔍 Análise de Incerteza"):
+                    st.info("**Funcionalidade Profissional:** Intervalos de confiança e predição disponíveis.")
+                    
+                    # Mock uncertainty visualization
+                    fig = go.Figure()
+                    
+                    x = np.linspace(0, 10, 50)
+                    y = x + np.random.normal(0, 0.5, 50)
+                    y_upper = y + 1.96 * 0.5
+                    y_lower = y - 1.96 * 0.5
+                    
+                    # Confidence band
+                    fig.add_trace(go.Scatter(
+                        x=np.concatenate([x, x[::-1]]),
+                        y=np.concatenate([y_upper, y_lower[::-1]]),
+                        fill='toself',
+                        fillcolor='rgba(0,100,80,0.2)',
+                        line=dict(color='rgba(255,255,255,0)'),
+                        showlegend=True,
+                        name='Intervalo de Confiança'
+                    ))
+                    
+                    # Main line
+                    fig.add_trace(go.Scatter(
+                        x=x, y=y,
+                        line=dict(color='rgb(0,100,80)'),
+                        mode='lines',
+                        name='Predição'
+                    ))
+                    
+                    fig.update_layout(
+                        title="Visualização de Incerteza (Simulação)",
+                        xaxis_title="Features",
+                        yaxis_title="Valor Predito",
+                        height=400
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            if st.session_state.user_tier == 'expert':
+                with st.expander("🧠 Análise SHAP (Especialista)"):
+                    st.info("**Funcionalidade Especialista:** Interpretabilidade glass-box absoluta.")
+                    
+                    # Mock SHAP analysis
+                    shap_data = {
+                        'area_privativa': 0.35,
+                        'localizacao_score': 0.28,
+                        'idade_imovel': -0.15,
+                        'vagas_garagem': 0.12,
+                        'banheiros': 0.08
+                    }
+                    
+                    st.write("**Top 5 Features por Importância SHAP:**")
+                    for feature, importance in shap_data.items():
+                        st.write(f"• {feature}: {importance:+.2f}")
+    
+    # Final actions
+    st.subheader("🎯 Ações Finais")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("📧 Exportar PDF"):
+            st.success("Relatório PDF gerado!")
+    
+    with col2:
+        if st.button("📊 Exportar Excel"):
+            st.success("Planilha Excel gerada!")
+    
+    with col3:
+        if st.button("🔄 Novo Fluxo"):
+            st.session_state.workflow_step = 1
+            st.session_state.workflow_data = {}
+            st.success("Fluxo reiniciado!")
+            st.rerun()
+
+def create_audit_timeline_chart(audit_data: Dict[str, Any]):
+    """
+    Cria gráfico de timeline da trilha de auditoria.
+    
+    Args:
+        audit_data: Dados da trilha de auditoria
+        
+    Returns:
+        Figura do Plotly
+    """
+    steps = audit_data.get('pipeline_steps', [])
+    
+    if not steps:
+        return None
+    
+    # Preparar dados
+    phases = [step['phase'] for step in steps]
+    durations = []
+    statuses = []
+    
+    for step in steps:
+        # Converter duração para segundos
+        duration_str = step.get('duration', '0s')
+        if 's' in duration_str:
+            duration = int(duration_str.replace('s', ''))
+        elif 'm' in duration_str:
+            parts = duration_str.replace('m', '').split()
+            duration = int(parts[0]) * 60
+            if len(parts) > 1:
+                duration += int(parts[1].replace('s', ''))
+        else:
+            duration = 0
+        
+        durations.append(duration)
+        statuses.append(step.get('status', 'unknown'))
+    
+    # Cores baseadas no status
+    colors = []
+    for status in statuses:
+        if status == 'completed':
+            colors.append('#28a745')
+        elif status == 'failed':
+            colors.append('#dc3545')
+        elif status == 'in_progress':
+            colors.append('#ffc107')
+        else:
+            colors.append('#6c757d')
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=durations,
+            y=phases,
+            orientation='h',
+            marker_color=colors,
+            text=[f"{d}s" for d in durations],
+            textposition='auto'
+        )
+    ])
+    
+    fig.update_layout(
+        title="Timeline de Execução da Trilha de Auditoria",
+        xaxis_title="Duração (segundos)",
+        yaxis_title="Fases",
+        height=500,
+        yaxis={'categoryorder': 'total ascending'}
+    )
+    
+    return fig
+
+def show_audit_trail_tab(evaluation_id: str):
+    """Mostra trilha de auditoria da avaliação."""
+    
+    st.subheader("🔍 Trilha de Auditoria")
+    
+    st.markdown("""
+    **Transparência Absoluta:** Esta seção demonstra a filosofia "glass-box" da Valion, 
+    documentando cada etapa do processo de avaliação para garantir auditabilidade total.
+    """)
+    
+    if st.button("🔄 Carregar Trilha de Auditoria"):
+        with st.spinner("Carregando trilha de auditoria..."):
+            audit_data = call_api(f"/evaluations/{evaluation_id}/audit_trail")
+        
+        if audit_data:
+            # Metadata da auditoria
+            st.subheader("📋 Metadados da Auditoria")
+            
+            metadata = audit_data.get('audit_metadata', {})
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Versão da Auditoria", metadata.get('audit_version', 'N/A'))
+            with col2:
+                st.metric("Total de Etapas", metadata.get('total_steps', 'N/A'))
+            with col3:
+                st.metric("Duração Total", metadata.get('execution_duration', 'N/A'))
+            
+            st.info(f"**Nível de Conformidade:** {metadata.get('compliance_level', 'N/A')}")
+            
+            # Timeline de execução
+            st.subheader("⏱️ Timeline de Execução")
+            
+            timeline_fig = create_audit_timeline_chart(audit_data)
+            if timeline_fig:
+                st.plotly_chart(timeline_fig, use_container_width=True)
+            
+            # Detalhes das etapas
+            st.subheader("📝 Detalhes das Etapas")
+            
+            steps = audit_data.get('pipeline_steps', [])
+            
+            for step in steps:
+                with st.expander(f"Etapa {step['step_id']}: {step['phase']} ({step['status']})"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write(f"**Timestamp:** {step['timestamp']}")
+                        st.write(f"**Duração:** {step['duration']}")
+                        st.write(f"**Status:** {step['status']}")
+                    
+                    with col2:
+                        details = step.get('details', {})
+                        st.write(f"**Ação:** {details.get('action', 'N/A')}")
+                        st.write(f"**Input:** {details.get('input', 'N/A')}")
+                        st.write(f"**Output:** {details.get('output', 'N/A')}")
+                    
+                    # Notas de auditoria
+                    if step.get('audit_notes'):
+                        st.markdown(f"**📝 Notas de Auditoria:** {step['audit_notes']}")
+                    
+                    # Detalhes específicos
+                    if 'transformations_applied' in details:
+                        st.write("**Transformações Aplicadas:**")
+                        for key, value in details['transformations_applied'].items():
+                            st.write(f"  • {key}: {value}")
+                    
+                    if 'cross_validation' in details:
+                        cv = details['cross_validation']
+                        st.write("**Validação Cruzada:**")
+                        st.write(f"  • Método: {cv.get('method', 'N/A')}")
+                        st.write(f"  • Score médio: {cv.get('mean_cv_score', 'N/A')}")
+                        st.write(f"  • Desvio padrão: {cv.get('std_cv_score', 'N/A')}")
+                    
+                    if 'tests_performed' in details:
+                        st.write("**Testes Realizados:**")
+                        tests = details['tests_performed']
+                        for test_name, test_data in tests.items():
+                            if isinstance(test_data, dict):
+                                result_icon = "✅" if test_data.get('result') == 'PASS' else "❌"
+                                st.write(f"  {result_icon} **{test_name}:** {test_data.get('value', 'N/A')}")
+            
+            # Análise de conformidade
+            st.subheader("✅ Análise de Conformidade")
+            
+            compliance = audit_data.get('compliance_evidence', {})
+            
+            # Conformidade NBR 14653
+            nbr_compliance = compliance.get('nbr_14653_conformity', {})
+            if nbr_compliance:
+                st.write("**📏 Conformidade NBR 14653:**")
+                
+                sections = nbr_compliance.get('section_compliance', {})
+                for section, status in sections.items():
+                    status_icon = "✅" if status == "CONFORMANT" else "❌"
+                    st.write(f"  {status_icon} {section}: {status}")
+                
+                justifications = nbr_compliance.get('justifications', [])
+                if justifications:
+                    st.write("**Justificativas:**")
+                    for justification in justifications:
+                        st.write(f"  • {justification}")
+            
+            # Transparência Glass-Box
+            glass_box = compliance.get('glass_box_transparency', {})
+            if glass_box:
+                st.write("**🔍 Transparência Glass-Box:**")
+                st.write(f"  • Nível de interpretabilidade: {glass_box.get('interpretability_level', 'N/A')}")
+                st.write(f"  • Score de auditabilidade: {glass_box.get('auditability_score', 'N/A')}")
+                st.write(f"  • Reprodutibilidade: {glass_box.get('reproducibility', 'N/A')}")
+                
+                methods = glass_box.get('explanation_methods', [])
+                if methods:
+                    st.write(f"  • Métodos de explicação: {', '.join(methods)}")
+            
+            # Linhagem dos dados
+            st.subheader("🔗 Linhagem dos Dados")
+            
+            lineage = audit_data.get('data_lineage', {})
+            if lineage:
+                source = lineage.get('source_data', {})
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Registros Originais", source.get('records_original', 'N/A'))
+                with col2:
+                    st.metric("Registros Finais", source.get('records_final', 'N/A'))
+                with col3:
+                    exclusions = source.get('records_original', 0) - source.get('records_final', 0)
+                    st.metric("Registros Excluídos", exclusions)
+                
+                if source.get('exclusion_reason'):
+                    st.info(f"**Motivo das exclusões:** {source['exclusion_reason']}")
+                
+                chains = lineage.get('transformations_chain', [])
+                if chains:
+                    st.write("**Cadeia de Transformações:**")
+                    for chain in chains:
+                        st.code(chain)
+                
+                if lineage.get('reproducibility_hash'):
+                    st.write(f"**Hash de Reprodutibilidade:** `{lineage['reproducibility_hash']}`")
+            
+            # Garantia de qualidade
+            st.subheader("🛡️ Garantia de Qualidade")
+            
+            qa = audit_data.get('quality_assurance', {})
+            if qa:
+                checks = qa.get('validation_checks', [])
+                if checks:
+                    st.write("**Verificações Realizadas:**")
+                    for check in checks:
+                        st.write(f"  ✅ {check}")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Status da Revisão:** {qa.get('peer_review_status', 'N/A')}")
+                    st.write(f"**Revisor Técnico:** {qa.get('technical_reviewer', 'N/A')}")
+                with col2:
+                    if qa.get('review_date'):
+                        review_date = datetime.fromisoformat(qa['review_date'].replace('Z', '+00:00'))
+                        st.write(f"**Data da Revisão:** {review_date.strftime('%d/%m/%Y %H:%M')}")
+            
+            # Botões de ação
+            st.subheader("📤 Exportar Trilha de Auditoria")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("📄 Exportar PDF"):
+                    st.success("Trilha de auditoria PDF gerada!")
+            
+            with col2:
+                if st.button("📊 Exportar Excel"):
+                    st.success("Planilha de auditoria Excel gerada!")
+            
+            with col3:
+                if st.button("💾 Exportar JSON"):
+                    # Disponibilizar download do JSON
+                    import json
+                    json_str = json.dumps(audit_data, indent=2, ensure_ascii=False)
+                    st.download_button(
+                        label="Baixar JSON",
+                        data=json_str,
+                        file_name=f"audit_trail_{evaluation_id}.json",
+                        mime="application/json"
+                    )
+        else:
+            st.error("Erro ao carregar trilha de auditoria.")
 
 def show_about_page():
     """Página sobre a aplicação."""

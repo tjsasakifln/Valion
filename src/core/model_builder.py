@@ -55,7 +55,13 @@ class ModelBuilder:
         self.scaler = StandardScaler()
         self.explainer = None
         self.expert_mode = config.get('expert_mode', False)
+        # Garantir Elastic Net como padrão (rejeitando métodos como stepwise)
         self.model_type = config.get('model_type', 'elastic_net')
+        # Validar que não seja um método ultrapassado
+        forbidden_methods = ['stepwise', 'backward', 'forward']
+        if self.model_type in forbidden_methods:
+            self.logger.warning(f"Método {self.model_type} rejeitado. Usando Elastic Net como padrão.")
+            self.model_type = 'elastic_net'
         
     def prepare_data(self, df: pd.DataFrame, target_col: str = 'valor', 
                     test_size: float = 0.2) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
@@ -243,14 +249,16 @@ class ModelBuilder:
         # Feature importance/coefficients
         feature_coefficients = self._get_feature_importance(feature_names)
         
-        # SHAP values para interpretabilidade
+        # SHAP values para interpretabilidade - OBRIGATÓRIO no modo especialista
         shap_values = None
         shap_feature_importance = None
         if self.expert_mode:
             try:
                 shap_values, shap_feature_importance = self._calculate_shap_values(X_train, X_test)
+                self.logger.info("SHAP values calculados - interpretabilidade garantida no modo especialista")
             except Exception as e:
-                self.logger.warning(f"Erro ao calcular SHAP values: {e}")
+                self.logger.error(f"ERRO CRÍTICO: SHAP obrigatório no modo especialista falhou: {e}")
+                raise ValueError(f"Modo especialista requer SHAP - {e}")
         
         # Permutation importance
         perm_importance = None
@@ -290,6 +298,7 @@ class ModelBuilder:
     def _calculate_shap_values(self, X_train: pd.DataFrame, X_test: pd.DataFrame) -> Tuple[np.ndarray, Dict[str, float]]:
         """
         Calcula SHAP values para interpretabilidade do modelo.
+        OBRIGATÓRIO no modo especialista para manter filosofia "glass-box".
         """
         # Usar amostra menor para evitar problemas de memória
         sample_size = min(100, len(X_train))
@@ -303,7 +312,9 @@ class ModelBuilder:
             self.explainer = shap.TreeExplainer(self.model)
         
         # Calcular SHAP values
-        shap_values = self.explainer.shap_values(X_test.iloc[:min(50, len(X_test))])
+        sample_size = min(50, len(X_test))
+        shap_values = self.explainer.shap_values(X_test.iloc[:sample_size])
+        self.logger.info(f"SHAP values calculados para {sample_size} amostras no modo especialista")
         
         # Calcular importância média das features
         if shap_values.ndim == 2:
@@ -314,6 +325,39 @@ class ModelBuilder:
         shap_feature_importance = dict(zip(X_test.columns, shap_importance))
         
         return shap_values, shap_feature_importance
+    
+    def get_shap_explanations(self, X_sample: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Gera explicações SHAP detalhadas para o modo especialista.
+        """
+        if self.explainer is None:
+            raise ValueError("Explainer SHAP não disponível")
+        
+        shap_values = self.explainer.shap_values(X_sample)
+        
+        explanations = {
+            'base_value': float(self.explainer.expected_value) if hasattr(self.explainer, 'expected_value') else 0.0,
+            'feature_contributions': {},
+            'sample_explanations': []
+        }
+        
+        # Contribuições médias das features
+        if shap_values.ndim == 2:
+            avg_contributions = np.abs(shap_values).mean(axis=0)
+            explanations['feature_contributions'] = dict(zip(X_sample.columns, avg_contributions))
+            
+            # Explicações por amostra
+            for i, (idx, row) in enumerate(X_sample.iterrows()):
+                sample_explanation = {
+                    'sample_id': str(idx),
+                    'features': row.to_dict(),
+                    'shap_values': dict(zip(X_sample.columns, shap_values[i])),
+                    'positive_contributions': {k: v for k, v in zip(X_sample.columns, shap_values[i]) if v > 0},
+                    'negative_contributions': {k: v for k, v in zip(X_sample.columns, shap_values[i]) if v < 0}
+                }
+                explanations['sample_explanations'].append(sample_explanation)
+        
+        return explanations
     
     def build_model(self, df: pd.DataFrame, target_col: str = 'valor') -> ModelResult:
         """
@@ -347,7 +391,7 @@ class ModelBuilder:
             'target_std': y_train.std()
         }
         
-        return ModelResult(
+        result = ModelResult(
             model=model,
             performance=performance,
             best_params=best_params,
@@ -355,6 +399,13 @@ class ModelBuilder:
             model_type=self.model_type,
             explainer=self.explainer
         )
+        
+        # Log de conformidade com padrões
+        self.logger.info(f"Modelo {self.model_type} construído com sucesso")
+        if self.expert_mode:
+            self.logger.info("Modo especialista ativo - SHAP obrigatório garantido")
+        
+        return result
     
     def save_model(self, model_result: ModelResult, filepath: str) -> None:
         """
