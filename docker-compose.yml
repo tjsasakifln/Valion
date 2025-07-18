@@ -1,5 +1,14 @@
 version: '3.8'
 
+# Configurações de ambiente compartilhadas
+x-common-env: &common-env
+  DATABASE_URL: postgresql://valion_user:valion_password@postgres:5432/valion
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/0
+  ENVIRONMENT: production
+  LOG_LEVEL: INFO
+
 services:
   # Banco de dados PostgreSQL
   postgres:
@@ -41,12 +50,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://valion_user:valion_password@postgres:5432/valion
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
+      <<: *common-env
     volumes:
       - ./uploads:/app/uploads
       - ./models:/app/models
@@ -66,12 +70,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      - DATABASE_URL=postgresql://valion_user:valion_password@postgres:5432/valion
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
+      <<: *common-env
     volumes:
       - ./uploads:/app/uploads
       - ./models:/app/models
@@ -93,8 +92,8 @@ services:
     ports:
       - "5555:5555"
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
       - redis
       - worker

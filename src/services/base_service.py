@@ -41,20 +41,25 @@ class ServiceInfo:
 
 @dataclass
 class ServiceRequest:
-    """Requisição entre serviços."""
+    """Requisição entre serviços com timeout configurável."""
     service_name: str
     method: str
     endpoint: str
     payload: Dict[str, Any]
     headers: Dict[str, str] = None
-    timeout: int = 30
+    timeout: int = 30  # Timeout padrão, pode ser sobrescrito por operação
     request_id: str = None
+    retry_count: int = 0  # Número de tentativas para retry
     
     def __post_init__(self):
         if self.request_id is None:
             self.request_id = str(uuid.uuid4())
         if self.headers is None:
             self.headers = {}
+        
+        # Validar timeout mínimo para evitar valores muito baixos
+        if self.timeout < 1:
+            self.timeout = 1
 
 
 @dataclass
@@ -103,6 +108,9 @@ class BaseService(ABC):
         self.service_registry = None
         self.dependencies = {}
         
+        # Configurações de timeout por serviço
+        self.service_timeouts = self._get_default_service_timeouts()
+        
         # Estado interno
         self.is_running = False
         self.shutdown_event = asyncio.Event()
@@ -116,6 +124,39 @@ class BaseService(ABC):
         
         self.logger.info(f"Service {service_name} initialized", 
                         service_info=asdict(self.service_info))
+    
+    def _get_default_service_timeouts(self) -> Dict[str, int]:
+        """
+        Define timeouts padrão por tipo de serviço baseado na natureza da operação.
+        
+        Returns:
+            Dicionário com timeouts por serviço
+        """
+        return {
+            # Serviços de ML/processamento pesado - timeouts longos
+            "ml_service": 180,  # 3 minutos para treinamento/predição
+            "model_service": 120,  # 2 minutos para operações de modelo
+            "data_processing_service": 90,  # 1.5 minutos para transformações
+            "analytics_service": 60,  # 1 minuto para análises
+            
+            # Serviços de dados - timeouts médios
+            "database_service": 45,  # 45 segundos para queries complexas
+            "cache_service": 10,  # 10 segundos para operações de cache
+            "storage_service": 30,  # 30 segundos para I/O de arquivos
+            
+            # Serviços de comunicação - timeouts curtos
+            "notification_service": 15,  # 15 segundos para notificações
+            "websocket_service": 5,  # 5 segundos para WebSocket
+            "auth_service": 10,  # 10 segundos para autenticação
+            
+            # Serviços de infraestrutura - timeouts muito curtos
+            "health_service": 5,  # 5 segundos para health checks
+            "metrics_service": 10,  # 10 segundos para métricas
+            "logging_service": 5,  # 5 segundos para logs
+            
+            # Default para serviços não especificados
+            "default": 30
+        }
     
     async def start(self):
         """Inicia o serviço."""
@@ -241,8 +282,18 @@ class BaseService(ABC):
         )
     
     async def call_service(self, request: ServiceRequest) -> ServiceResponse:
-        """Chama outro serviço."""
+        """
+        Chama outro serviço com timeout inteligente baseado no tipo de serviço.
+        
+        O timeout é determinado pela seguinte prioridade:
+        1. Timeout explícito no ServiceRequest (se diferente do padrão)
+        2. Timeout configurado para o serviço específico
+        3. Timeout padrão (30 segundos)
+        """
         start_time = datetime.now()
+        
+        # Determinar timeout apropriado
+        effective_timeout = self._get_effective_timeout(request)
         
         try:
             # Buscar URL do serviço
@@ -262,28 +313,50 @@ class BaseService(ABC):
                 **request.headers,
                 "Content-Type": "application/json",
                 "X-Request-ID": request.request_id,
-                "X-Service-Name": self.service_info.name
+                "X-Service-Name": self.service_info.name,
+                "X-Timeout": str(effective_timeout)  # Para debugging
             }
             
-            # Fazer requisição
+            # Log do timeout usado para debugging
+            self.logger.debug(
+                f"Calling {request.service_name}{request.endpoint} with timeout {effective_timeout}s",
+                service=request.service_name,
+                endpoint=request.endpoint,
+                timeout=effective_timeout,
+                request_id=request.request_id
+            )
+            
+            # Fazer requisição com timeout específico
+            timeout = aiohttp.ClientTimeout(total=effective_timeout)
             async with self.http_session.request(
                 method=request.method,
                 url=url,
                 json=request.payload,
                 headers=headers,
-                timeout=request.timeout
+                timeout=timeout
             ) as response:
                 
                 response_data = await response.json() if response.content_type == 'application/json' else await response.text()
                 
                 processing_time = (datetime.now() - start_time).total_seconds()
                 
-                # Registrar métricas
+                # Registrar métricas com informações de timeout
                 self.metrics.record_api_request(
                     method=request.method,
                     endpoint=request.endpoint,
                     status_code=response.status,
                     duration=processing_time
+                )
+                
+                # Log de sucesso com tempo de resposta
+                self.logger.info(
+                    f"Service call completed: {request.service_name}{request.endpoint}",
+                    service=request.service_name,
+                    endpoint=request.endpoint,
+                    status_code=response.status,
+                    duration=processing_time,
+                    timeout_used=effective_timeout,
+                    request_id=request.request_id
                 )
                 
                 return ServiceResponse(
@@ -297,11 +370,26 @@ class BaseService(ABC):
         except asyncio.TimeoutError:
             processing_time = (datetime.now() - start_time).total_seconds()
             
-            self.logger.error(f"Timeout calling service {request.service_name}")
+            self.logger.error(
+                f"Timeout calling service {request.service_name}{request.endpoint}",
+                service=request.service_name,
+                endpoint=request.endpoint,
+                timeout_used=effective_timeout,
+                duration=processing_time,
+                request_id=request.request_id
+            )
+            
+            # Registrar timeout nas métricas
+            self.metrics.record_api_request(
+                method=request.method,
+                endpoint=request.endpoint,
+                status_code=408,
+                duration=processing_time
+            )
             
             return ServiceResponse(
                 success=False,
-                error="Service call timeout",
+                error=f"Service call timeout after {effective_timeout}s",
                 status_code=408,
                 processing_time=processing_time,
                 request_id=request.request_id
@@ -310,7 +398,14 @@ class BaseService(ABC):
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
             
-            self.logger.error(f"Error calling service {request.service_name}: {e}")
+            self.logger.error(
+                f"Error calling service {request.service_name}{request.endpoint}: {e}",
+                service=request.service_name,
+                endpoint=request.endpoint,
+                error=str(e),
+                duration=processing_time,
+                request_id=request.request_id
+            )
             
             return ServiceResponse(
                 success=False,
@@ -319,6 +414,28 @@ class BaseService(ABC):
                 processing_time=processing_time,
                 request_id=request.request_id
             )
+    
+    def _get_effective_timeout(self, request: ServiceRequest) -> int:
+        """
+        Determina o timeout efetivo para a requisição.
+        
+        Args:
+            request: Requisição do serviço
+            
+        Returns:
+            Timeout em segundos
+        """
+        # Se o timeout foi explicitamente definido (diferente do padrão), usar ele
+        if request.timeout != 30:  # 30 é o padrão
+            return request.timeout
+        
+        # Buscar timeout específico para o serviço
+        service_timeout = self.service_timeouts.get(request.service_name)
+        if service_timeout:
+            return service_timeout
+        
+        # Usar timeout padrão
+        return self.service_timeouts.get("default", 30)
     
     async def _get_service_url(self, service_name: str) -> Optional[str]:
         """Obtém URL do serviço pelo nome."""
@@ -334,6 +451,62 @@ class BaseService(ABC):
         """Adiciona dependência de serviço."""
         self.dependencies[service_name] = service_url
         self.logger.info(f"Added dependency: {service_name} -> {service_url}")
+    
+    def configure_service_timeout(self, service_name: str, timeout: int):
+        """
+        Configura timeout específico para um serviço.
+        
+        Args:
+            service_name: Nome do serviço
+            timeout: Timeout em segundos
+        """
+        if timeout < 1:
+            raise ValueError("Timeout deve ser pelo menos 1 segundo")
+        
+        self.service_timeouts[service_name] = timeout
+        self.logger.info(f"Configured timeout for {service_name}: {timeout}s")
+    
+    def get_service_timeout(self, service_name: str) -> int:
+        """
+        Obtém timeout configurado para um serviço.
+        
+        Args:
+            service_name: Nome do serviço
+            
+        Returns:
+            Timeout em segundos
+        """
+        return self.service_timeouts.get(service_name, self.service_timeouts.get("default", 30))
+    
+    def create_service_request(self, service_name: str, method: str, endpoint: str, 
+                             payload: Dict[str, Any], timeout: Optional[int] = None,
+                             headers: Optional[Dict[str, str]] = None) -> ServiceRequest:
+        """
+        Factory method para criar ServiceRequest com timeout apropriado.
+        
+        Args:
+            service_name: Nome do serviço
+            method: Método HTTP
+            endpoint: Endpoint do serviço
+            payload: Dados da requisição
+            timeout: Timeout customizado (opcional)
+            headers: Headers customizados (opcional)
+            
+        Returns:
+            ServiceRequest configurado
+        """
+        # Se não foi especificado timeout, usar o configurado para o serviço
+        if timeout is None:
+            timeout = self.get_service_timeout(service_name)
+        
+        return ServiceRequest(
+            service_name=service_name,
+            method=method,
+            endpoint=endpoint,
+            payload=payload,
+            timeout=timeout,
+            headers=headers or {}
+        )
     
     def add_startup_callback(self, callback: Callable):
         """Adiciona callback de startup."""
@@ -358,19 +531,20 @@ class BaseService(ABC):
         self.logger.info(f"Service registry set for {self.service_info.name}")
     
     async def broadcast_event(self, event_type: str, data: Dict[str, Any]):
-        """Envia evento para outros serviços."""
+        """Envia evento para outros serviços com timeout apropriado."""
         if self.service_registry:
             services = await self.service_registry.get_all_services()
             
             for service in services:
                 if service.name != self.service_info.name:
                     try:
-                        request = ServiceRequest(
+                        # Usar factory method que aplica timeout apropriado automaticamente
+                        request = self.create_service_request(
                             service_name=service.name,
                             method="POST",
                             endpoint="/events",
-                            payload={"event_type": event_type, "data": data},
-                            timeout=10
+                            payload={"event_type": event_type, "data": data}
+                            # timeout será definido automaticamente baseado no tipo de serviço
                         )
                         
                         await self.call_service(request)
@@ -386,11 +560,34 @@ class BaseService(ABC):
         pass
     
     def get_service_info(self) -> Dict[str, Any]:
-        """Retorna informações do serviço."""
+        """Retorna informações do serviço incluindo configurações de timeout."""
         return {
             **asdict(self.service_info),
             "is_running": self.is_running,
-            "dependencies": list(self.dependencies.keys())
+            "dependencies": list(self.dependencies.keys()),
+            "timeout_configuration": self.service_timeouts.copy()
+        }
+    
+    def get_timeout_info(self) -> Dict[str, Any]:
+        """
+        Retorna informações detalhadas sobre configurações de timeout.
+        
+        Returns:
+            Informações sobre timeouts configurados
+        """
+        return {
+            "service_timeouts": self.service_timeouts.copy(),
+            "default_timeout": self.service_timeouts.get("default", 30),
+            "configured_services": [
+                service for service in self.service_timeouts.keys() 
+                if service != "default"
+            ],
+            "timeout_examples": {
+                "ml_service": f"{self.get_service_timeout('ml_service')}s (ML operations)",
+                "database_service": f"{self.get_service_timeout('database_service')}s (Database queries)",
+                "cache_service": f"{self.get_service_timeout('cache_service')}s (Cache operations)",
+                "notification_service": f"{self.get_service_timeout('notification_service')}s (Notifications)"
+            }
         }
     
     def __str__(self) -> str:

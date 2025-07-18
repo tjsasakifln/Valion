@@ -33,6 +33,7 @@ from src.config.settings import Settings
 from src.websocket.websocket_manager import websocket_manager, ProgressUpdate
 from src.database.database import get_database_manager
 import asyncio
+from asgiref.sync import async_to_sync
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
@@ -130,8 +131,50 @@ def safe_database_operation(evaluation_id: str = None):
             raise
 
 # Funções auxiliares
+
+def run_async_from_sync(coro):
+    """
+    Executa uma corrotina a partir de um contexto síncrono de forma segura.
+    
+    Esta função resolve o anti-padrão de criar event loops manuais em workers síncronos,
+    utilizando async_to_sync do Django/asgiref que gerencia loops de evento de forma segura.
+    
+    Args:
+        coro: Corrotina a ser executada
+        
+    Returns:
+        Resultado da corrotina
+    """
+    try:
+        # Usar async_to_sync é a maneira segura de executar código assíncrono
+        # a partir de um contexto síncrono como o Celery worker
+        return async_to_sync(coro)()
+    except RuntimeError as e:
+        # Fallback para casos onde async_to_sync não funciona
+        # (ex: thread que já tem event loop)
+        logger.warning(f"async_to_sync falhou, usando fallback: {e}")
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Não há loop na thread atual, criar um novo
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+        else:
+            # Já existe um loop, usar create_task
+            return loop.run_until_complete(coro)
+
 def send_websocket_update(evaluation_id: str, status: str, phase: str, progress: float, message: str, metadata: Optional[Dict] = None):
-    """Envia atualização via WebSocket."""
+    """
+    Envia atualização via WebSocket de forma segura a partir do contexto síncrono do Celery.
+    
+    Esta implementação corrige o anti-padrão de criar event loops manuais,
+    usando uma abordagem segura para comunicação entre código síncrono e assíncrono.
+    """
     try:
         update = ProgressUpdate(
             evaluation_id=evaluation_id,
@@ -143,13 +186,14 @@ def send_websocket_update(evaluation_id: str, status: str, phase: str, progress:
             metadata=metadata
         )
         
-        # Como o Celery roda de forma síncrona, precisa executar a função assíncrona
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(websocket_manager.send_progress_update(evaluation_id, update))
-        loop.close()
+        # Use o wrapper seguro para chamar a função assíncrona
+        run_async_from_sync(websocket_manager.send_progress_update(evaluation_id, update))
+        
     except Exception as e:
-        logger.warning(f"Erro ao enviar update WebSocket: {e}")
+        # Log warning mas não falhe a task por problemas de WebSocket
+        logger.warning(f"Erro ao enviar update WebSocket para {evaluation_id}: {e}")
+        # Em produção, pode ser útil enviar para um sistema de monitoramento
+        # como Sentry ou similar
 
 def log_audit_trail(evaluation_id: str, operation: str, entity_type: str, entity_id: Optional[str] = None,
                    old_values: Optional[Dict] = None, new_values: Optional[Dict] = None, 
@@ -628,8 +672,19 @@ def make_prediction(self, model_path: str, features: Dict[str, Any]):
 @app.task(name='valion_worker.tasks.health_check')
 def health_check():
     """Verifica saúde do worker."""
+    # Test the async-to-sync conversion works properly
+    try:
+        async def test_async():
+            return "async_conversion_working"
+        
+        test_result = run_async_from_sync(test_async())
+        async_status = "working" if test_result == "async_conversion_working" else "failed"
+    except Exception as e:
+        async_status = f"error: {str(e)}"
+    
     return {
         'status': 'healthy',
+        'async_conversion_status': async_status,
         'timestamp': datetime.now().isoformat(),
         'worker_id': os.getenv('HOSTNAME', 'unknown')
     }

@@ -17,6 +17,8 @@ import pandas as pd
 import uuid
 from pathlib import Path
 import os
+import redis
+from redis.exceptions import RedisError
 
 # Core module imports
 from src.core.data_loader import DataLoader, DataValidationResult
@@ -53,6 +55,162 @@ app.add_middleware(
 
 # Settings
 settings = Settings()
+
+# Redis client initialization
+try:
+    redis_client = redis.Redis.from_url(settings.redis.url, decode_responses=True)
+    redis_client.ping()  # Test connection
+    logger.info("Redis connection established successfully")
+except RedisError as e:
+    logger.error(f"Failed to connect to Redis: {e}")
+    redis_client = None
+
+# State management class
+class StateManager:
+    """Manages evaluation state using Redis or fallback to in-memory."""
+    
+    def __init__(self, redis_client=None):
+        self.redis_client = redis_client
+        self.fallback_storage = {}  # Fallback for when Redis is unavailable
+        self.use_redis = redis_client is not None
+        
+        if not self.use_redis:
+            logger.warning("Redis unavailable - using in-memory storage (not suitable for production)")
+    
+    def _get_key(self, evaluation_id: str, suffix: str = "") -> str:
+        """Generate Redis key for evaluation data."""
+        base_key = f"evaluation:{evaluation_id}"
+        return f"{base_key}:{suffix}" if suffix else base_key
+    
+    def set_evaluation_data(self, evaluation_id: str, data: dict, ttl: int = 3600) -> bool:
+        """
+        Store evaluation data with TTL.
+        
+        Args:
+            evaluation_id: Evaluation ID
+            data: Data to store
+            ttl: Time to live in seconds (default 1 hour)
+            
+        Returns:
+            True if successful
+        """
+        try:
+            if self.use_redis:
+                key = self._get_key(evaluation_id)
+                serialized_data = json.dumps(data, default=str)
+                self.redis_client.set(key, serialized_data, ex=ttl)
+                return True
+            else:
+                self.fallback_storage[evaluation_id] = data
+                return True
+        except Exception as e:
+            logger.error(f"Failed to store evaluation data for {evaluation_id}: {e}")
+            # Fallback to in-memory if Redis fails
+            self.fallback_storage[evaluation_id] = data
+            return False
+    
+    def get_evaluation_data(self, evaluation_id: str) -> Optional[dict]:
+        """
+        Retrieve evaluation data.
+        
+        Args:
+            evaluation_id: Evaluation ID
+            
+        Returns:
+            Evaluation data or None if not found
+        """
+        try:
+            if self.use_redis:
+                key = self._get_key(evaluation_id)
+                data = self.redis_client.get(key)
+                if data:
+                    return json.loads(data)
+                return None
+            else:
+                return self.fallback_storage.get(evaluation_id)
+        except Exception as e:
+            logger.error(f"Failed to retrieve evaluation data for {evaluation_id}: {e}")
+            # Try fallback storage
+            return self.fallback_storage.get(evaluation_id)
+    
+    def update_evaluation_status(self, evaluation_id: str, status: dict) -> bool:
+        """
+        Update just the status part of evaluation data.
+        
+        Args:
+            evaluation_id: Evaluation ID
+            status: Status data to update
+            
+        Returns:
+            True if successful
+        """
+        try:
+            # Get existing data
+            existing_data = self.get_evaluation_data(evaluation_id)
+            if existing_data:
+                existing_data["status"] = status
+                return self.set_evaluation_data(evaluation_id, existing_data)
+            return False
+        except Exception as e:
+            logger.error(f"Failed to update status for {evaluation_id}: {e}")
+            return False
+    
+    def set_evaluation_result(self, evaluation_id: str, result: dict) -> bool:
+        """
+        Set the result part of evaluation data.
+        
+        Args:
+            evaluation_id: Evaluation ID
+            result: Result data
+            
+        Returns:
+            True if successful
+        """
+        try:
+            existing_data = self.get_evaluation_data(evaluation_id)
+            if existing_data:
+                existing_data["result"] = result
+                return self.set_evaluation_data(evaluation_id, existing_data)
+            return False
+        except Exception as e:
+            logger.error(f"Failed to set result for {evaluation_id}: {e}")
+            return False
+    
+    def delete_evaluation_data(self, evaluation_id: str) -> bool:
+        """
+        Delete evaluation data.
+        
+        Args:
+            evaluation_id: Evaluation ID
+            
+        Returns:
+            True if successful
+        """
+        try:
+            if self.use_redis:
+                key = self._get_key(evaluation_id)
+                self.redis_client.delete(key)
+            else:
+                self.fallback_storage.pop(evaluation_id, None)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete evaluation data for {evaluation_id}: {e}")
+            return False
+    
+    def evaluation_exists(self, evaluation_id: str) -> bool:
+        """
+        Check if evaluation exists.
+        
+        Args:
+            evaluation_id: Evaluation ID
+            
+        Returns:
+            True if exists
+        """
+        return self.get_evaluation_data(evaluation_id) is not None
+
+# Initialize state manager
+state_manager = StateManager(redis_client)
 
 # Pydantic models
 class EvaluationRequest(BaseModel):
@@ -141,8 +299,6 @@ class DataEnrichmentRequest(BaseModel):
     city_center_lon: Optional[float] = None
 
 
-# In-memory storage for results (in production, use Redis/Database)
-evaluation_results: Dict[str, Dict[str, Any]] = {}
 
 # API endpoints
 
@@ -183,11 +339,12 @@ async def create_evaluation(request: EvaluationRequest):
         timestamp=datetime.now()
     )
     
-    evaluation_results[evaluation_id] = {
-        "status": status,
-        "request": request,
+    evaluation_data = {
+        "status": status.model_dump(),
+        "request": request.model_dump(),
         "result": None
     }
+    state_manager.set_evaluation_data(evaluation_id, evaluation_data)
     
     # Log selected mode
     logger.info(f"Evaluation {evaluation_id} started in {request.mode} mode")
@@ -215,10 +372,11 @@ async def get_evaluation_status(evaluation_id: str):
     Returns:
         Current evaluation status
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
-    return evaluation_results[evaluation_id]["status"]
+    return evaluation_data["status"]
 
 @app.get("/evaluations/{evaluation_id}/result")
 async def get_evaluation_result(evaluation_id: str):
@@ -231,10 +389,11 @@ async def get_evaluation_result(evaluation_id: str):
     Returns:
         Complete evaluation result
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
-    result = evaluation_results[evaluation_id]["result"]
+    result = evaluation_data["result"]
     if result is None:
         raise HTTPException(status_code=202, detail="Evaluation still in progress")
     
@@ -252,10 +411,11 @@ async def make_prediction(evaluation_id: str, request: PredictionRequest):
     Returns:
         Value prediction
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
-    result = evaluation_results[evaluation_id]["result"]
+    result = evaluation_data["result"]
     if result is None:
         raise HTTPException(status_code=202, detail="Model not yet trained")
     
@@ -390,7 +550,8 @@ async def approve_evaluation_step(evaluation_id: str, request: StepApprovalReque
     Returns:
         Status da aprovação
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
     # Validar etapa
@@ -412,18 +573,18 @@ async def approve_evaluation_step(evaluation_id: str, request: StepApprovalReque
         )
         
         # Atualizar status local
-        current_status = evaluation_results[evaluation_id]["status"]
+        current_status = evaluation_data["status"]
         if request.approved:
             phase_map = {
                 "transformations": "Continuando com modelagem",
                 "outliers": "Aplicando remoção de outliers",
                 "model_selection": "Finalizando modelo"
             }
-            current_status.message = phase_map.get(request.step, "Continuando processo")
+            current_status["message"] = phase_map.get(request.step, "Continuando processo")
         else:
-            current_status.message = f"Etapa {request.step} rejeitada - ajustando abordagem"
+            current_status["message"] = f"Etapa {request.step} rejeitada - ajustando abordagem"
         
-        evaluation_results[evaluation_id]["status"] = current_status
+        state_manager.update_evaluation_status(evaluation_id, current_status)
         
         return {
             "evaluation_id": evaluation_id,
@@ -448,18 +609,18 @@ async def get_pending_approval(evaluation_id: str):
     Returns:
         Detalhes da etapa pendente
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
-    result_data = evaluation_results[evaluation_id]
-    status = result_data["status"]
+    status = evaluation_data["status"]
     
     # Verificar se há aprovação pendente
-    if "aguardando_aprovacao" not in status.status:
+    if "aguardando_aprovacao" not in status.get("status", ""):
         return {"pending_approval": False, "message": "Nenhuma aprovação pendente"}
     
     # Extrair dados da etapa pendente do metadata
-    pending_data = getattr(status, 'metadata', {})
+    pending_data = status.get('metadata', {})
     
     return {
         "pending_approval": True,
@@ -467,9 +628,9 @@ async def get_pending_approval(evaluation_id: str):
         "step": pending_data.get('step', 'unknown'),
         "details": pending_data.get('details', {}),
         "suggestions": pending_data.get('suggestions', []),
-        "current_phase": status.current_phase,
-        "message": status.message,
-        "timestamp": status.timestamp
+        "current_phase": status.get("current_phase", ""),
+        "message": status.get("message", ""),
+        "timestamp": status.get("timestamp", "")
     }
 
 @app.get("/evaluations/{evaluation_id}/audit_trail")
@@ -483,7 +644,8 @@ async def get_audit_trail(evaluation_id: str):
     Returns:
         Trilha de auditoria detalhada
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
     try:
@@ -714,15 +876,16 @@ async def get_shap_explanations(evaluation_id: str, sample_size: int = 5):
     Returns:
         Explicações SHAP detalhadas
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
-    result = evaluation_results[evaluation_id]["result"]
+    result = evaluation_data["result"]
     if result is None:
         raise HTTPException(status_code=202, detail="Model not yet trained")
     
     # Verificar se é modo especialista
-    request_config = evaluation_results[evaluation_id]["request"].config
+    request_config = evaluation_data["request"].get("config", {})
     if not request_config.get('expert_mode', False):
         raise HTTPException(status_code=400, detail="Explicações SHAP disponíveis apenas no modo especialista")
     
@@ -773,15 +936,16 @@ async def simulate_shap_scenario(evaluation_id: str, request: ShapSimulationRequ
     Returns:
         Análise comparativa do cenário simulado
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
-    result = evaluation_results[evaluation_id]["result"]
+    result = evaluation_data["result"]
     if result is None:
         raise HTTPException(status_code=202, detail="Model not yet trained")
     
     # Verificar modo especialista
-    request_config = evaluation_results[evaluation_id]["request"].config
+    request_config = evaluation_data["request"].get("config", {})
     if not request_config.get('expert_mode', False):
         raise HTTPException(status_code=400, detail="Simulação SHAP disponível apenas no modo especialista")
     
@@ -913,15 +1077,16 @@ async def get_shap_waterfall(evaluation_id: str, sample_index: int = 0):
     Returns:
         Dados estruturados para gráfico waterfall
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
-    result = evaluation_results[evaluation_id]["result"]
+    result = evaluation_data["result"]
     if result is None:
         raise HTTPException(status_code=202, detail="Model not yet trained")
     
     # Verificar modo especialista
-    request_config = evaluation_results[evaluation_id]["request"].config
+    request_config = evaluation_data["request"].get("config", {})
     if not request_config.get('expert_mode', False):
         raise HTTPException(status_code=400, detail="Waterfall SHAP disponível apenas no modo especialista")
     
@@ -1000,10 +1165,11 @@ async def get_laboratory_features(evaluation_id: str):
     Returns:
         Metadados das features para interface interativa
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
-    result = evaluation_results[evaluation_id]["result"]
+    result = evaluation_data["result"]
     if result is None:
         raise HTTPException(status_code=202, detail="Model not yet trained")
     
@@ -1246,7 +1412,8 @@ async def enrich_dataset_geospatial(evaluation_id: str, request: DataEnrichmentR
     Returns:
         Status do enriquecimento e estatísticas
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
     try:
@@ -1306,7 +1473,8 @@ async def enrich_dataset_geospatial(evaluation_id: str, request: DataEnrichmentR
         heatmap_data = analyzer.generate_location_heatmap_data(enriched_data)
         
         # Armazenar dados enriquecidos (em implementação real, salvaria no storage)
-        evaluation_results[evaluation_id]["enriched_data"] = enriched_data.to_dict('records')
+        evaluation_data["enriched_data"] = enriched_data.to_dict('records')
+        state_manager.set_evaluation_data(evaluation_id, evaluation_data)
         
         result = {
             "evaluation_id": evaluation_id,
@@ -1343,12 +1511,13 @@ async def get_geospatial_heatmap(evaluation_id: str):
     Returns:
         Dados estruturados para visualização em mapa de calor
     """
-    if evaluation_id not in evaluation_results:
+    evaluation_data = state_manager.get_evaluation_data(evaluation_id)
+    if not evaluation_data:
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
     try:
         # Verificar se há dados enriquecidos
-        enriched_data = evaluation_results[evaluation_id].get("enriched_data")
+        enriched_data = evaluation_data.get("enriched_data")
         if not enriched_data:
             raise HTTPException(status_code=404, detail="Dados geoespaciais não encontrados. Execute primeiro o enriquecimento.")
         

@@ -11,6 +11,13 @@ from pathlib import Path
 import json
 import logging
 
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+    AWS_AVAILABLE = True
+except ImportError:
+    AWS_AVAILABLE = False
+
 
 @dataclass
 class DatabaseSettings:
@@ -159,13 +166,90 @@ class CacheSettings:
 
 @dataclass
 class SecuritySettings:
-    """Configurações de segurança."""
-    secret_key: str = "your-secret-key-here"
+    """Configurações de segurança com suporte a gerenciamento de segredos."""
+    secret_key: str = ""
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
     password_hash_algorithm: str = "bcrypt"
     password_rounds: int = 12
+    use_secrets_manager: bool = False
+    secrets_manager_region: str = "us-east-1"
+    
+    def __post_init__(self):
+        """Inicializa configurações de segurança e carrega segredos se necessário."""
+        if self.use_secrets_manager and not self.secret_key:
+            self.secret_key = self._get_secret("valion/secret_key")
+    
+    def _get_secret(self, secret_name: str) -> str:
+        """
+        Recupera um segredo do AWS Secrets Manager.
+        
+        Args:
+            secret_name: Nome do segredo no AWS Secrets Manager
+            
+        Returns:
+            Valor do segredo
+            
+        Raises:
+            Exception: Se não conseguir carregar o segredo
+        """
+        if not AWS_AVAILABLE:
+            raise Exception("boto3 não está instalado. Instale com: pip install boto3")
+        
+        try:
+            session = boto3.session.Session()
+            client = session.client(
+                service_name='secretsmanager',
+                region_name=self.secrets_manager_region
+            )
+            get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+            return get_secret_value_response['SecretString']
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'DecryptionFailureException':
+                raise Exception(f"Falha na descriptografia do segredo: {secret_name}") from e
+            elif error_code == 'InternalServiceErrorException':
+                raise Exception(f"Erro interno do serviço ao acessar: {secret_name}") from e
+            elif error_code == 'InvalidParameterException':
+                raise Exception(f"Parâmetro inválido para o segredo: {secret_name}") from e
+            elif error_code == 'InvalidRequestException':
+                raise Exception(f"Requisição inválida para o segredo: {secret_name}") from e
+            elif error_code == 'ResourceNotFoundException':
+                raise Exception(f"Segredo não encontrado: {secret_name}") from e
+            else:
+                raise Exception(f"Erro desconhecido ao carregar segredo {secret_name}: {e}") from e
+        except Exception as e:
+            raise Exception(f"Não foi possível carregar o segredo: {secret_name}") from e
+    
+    def get_database_password(self, secret_name: str = "valion/db_password") -> str:
+        """
+        Recupera senha do banco de dados do gerenciador de segredos.
+        
+        Args:
+            secret_name: Nome do segredo da senha do banco
+            
+        Returns:
+            Senha do banco de dados
+        """
+        if self.use_secrets_manager:
+            return self._get_secret(secret_name)
+        return os.getenv("DB_PASSWORD", "")
+    
+    def validate_secret_key(self) -> bool:
+        """
+        Valida se a secret key está configurada adequadamente.
+        
+        Returns:
+            True se a secret key é válida
+        """
+        if not self.secret_key:
+            return False
+        if len(self.secret_key) < 32:
+            return False
+        if self.secret_key in ["your-secret-key-here", "your-secret-key-change-this-in-production"]:
+            return False
+        return True
 
 
 class Settings:
@@ -189,13 +273,25 @@ class Settings:
     def _load_from_env(self):
         """Carrega configurações de variáveis de ambiente."""
         
+        # Security (initialize first to use for database password)
+        use_secrets_manager = os.getenv("USE_SECRETS_MANAGER", "false").lower() == "true"
+        self.security = SecuritySettings(
+            secret_key=os.getenv("SECRET_KEY", ""),
+            algorithm=os.getenv("ALGORITHM", "HS256"),
+            access_token_expire_minutes=int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")),
+            refresh_token_expire_days=int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7")),
+            use_secrets_manager=use_secrets_manager,
+            secrets_manager_region=os.getenv("SECRETS_MANAGER_REGION", "us-east-1")
+        )
+        
         # Database
+        db_password = self.security.get_database_password() if use_secrets_manager else os.getenv("DB_PASSWORD", "")
         self.database = DatabaseSettings(
             host=os.getenv("DB_HOST", "localhost"),
             port=int(os.getenv("DB_PORT", "5432")),
             name=os.getenv("DB_NAME", "valion"),
             user=os.getenv("DB_USER", "valion_user"),
-            password=os.getenv("DB_PASSWORD", ""),
+            password=db_password,
             url=os.getenv("DATABASE_URL")
         )
         
@@ -272,13 +368,6 @@ class Settings:
             redis_db=int(os.getenv("CACHE_REDIS_DB", "1"))
         )
         
-        # Security
-        self.security = SecuritySettings(
-            secret_key=os.getenv("SECRET_KEY", "your-secret-key-here"),
-            algorithm=os.getenv("ALGORITHM", "HS256"),
-            access_token_expire_minutes=int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")),
-            refresh_token_expire_days=int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
-        )
         
         # Environment
         self.environment = os.getenv("ENVIRONMENT", "development")
@@ -496,8 +585,8 @@ class Settings:
             errors.append("Porta da API deve estar entre 1024 e 65535")
         
         # Validar configurações de segurança
-        if len(self.security.secret_key) < 32:
-            errors.append("Secret key deve ter pelo menos 32 caracteres")
+        if not self.security.validate_secret_key():
+            errors.append("Secret key deve ter pelo menos 32 caracteres e não pode usar valores padrão")
         
         return errors
     

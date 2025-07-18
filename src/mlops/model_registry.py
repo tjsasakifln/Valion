@@ -1,7 +1,7 @@
 # For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
-Model Registry para MLOps
-Sistema de versionamento e gestão de modelos de ML.
+Model Registry for MLOps
+Model versioning and management system for ML lifecycle.
 """
 
 import json
@@ -24,7 +24,7 @@ import structlog
 
 
 class ModelStage(Enum):
-    """Estágios do modelo."""
+    """Model deployment stages."""
     DEVELOPMENT = "development"
     STAGING = "staging"
     PRODUCTION = "production"
@@ -32,7 +32,7 @@ class ModelStage(Enum):
 
 
 class ModelStatus(Enum):
-    """Status do modelo."""
+    """Model status states."""
     TRAINING = "training"
     READY = "ready"
     DEPLOYED = "deployed"
@@ -42,7 +42,7 @@ class ModelStatus(Enum):
 
 @dataclass
 class ModelMetadata:
-    """Metadados do modelo."""
+    """Model metadata container."""
     name: str
     version: str
     algorithm: str
@@ -58,7 +58,7 @@ class ModelMetadata:
     updated_at: datetime
     
     def to_dict(self) -> Dict[str, Any]:
-        """Converte para dicionário."""
+        """Convert to dictionary."""
         return {
             **asdict(self),
             'created_at': self.created_at.isoformat(),
@@ -67,7 +67,7 @@ class ModelMetadata:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ModelMetadata':
-        """Cria instância a partir de dicionário."""
+        """Create instance from dictionary."""
         data = data.copy()
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
@@ -76,7 +76,7 @@ class ModelMetadata:
 
 @dataclass
 class ModelVersion:
-    """Versão do modelo."""
+    """Model version."""
     model_id: str
     version: str
     stage: ModelStage
@@ -90,7 +90,7 @@ class ModelVersion:
     parent_version: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
-        """Converte para dicionário."""
+        """Convert to dictionary."""
         return {
             'model_id': self.model_id,
             'version': self.version,
@@ -107,7 +107,7 @@ class ModelVersion:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ModelVersion':
-        """Cria instância a partir de dicionário."""
+        """Create instance from dictionary."""
         return cls(
             model_id=data['model_id'],
             version=data['version'],
@@ -124,19 +124,19 @@ class ModelVersion:
 
 
 class ModelRegistry:
-    """Registry central de modelos."""
+    """Central model registry."""
     
     def __init__(self, registry_dir: str = "model_registry"):
         self.registry_dir = Path(registry_dir)
         self.registry_dir.mkdir(parents=True, exist_ok=True)
         
-        # Diretórios
+        # Directories
         self.models_dir = self.registry_dir / "models"
         self.artifacts_dir = self.registry_dir / "artifacts"
         self.metadata_dir = self.registry_dir / "metadata"
         self.db_path = self.registry_dir / "registry.db"
         
-        # Criar diretórios
+        # Create directories
         for dir_path in [self.models_dir, self.artifacts_dir, self.metadata_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
         
@@ -144,14 +144,14 @@ class ModelRegistry:
         self.logger = get_logger("model_registry")
         self.struct_logger = structlog.get_logger("model_registry")
         
-        # Thread lock para operações concorrentes
+        # Thread lock for concurrent operations
         self.lock = threading.Lock()
         
-        # Inicializar banco de dados
+        # Initialize database
         self._init_database()
     
     def _init_database(self):
-        """Inicializa banco de dados SQLite."""
+        """Initialize SQLite database."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS models (
@@ -201,7 +201,7 @@ class ModelRegistry:
     
     @contextmanager
     def _get_db_connection(self):
-        """Context manager para conexão com banco."""
+        """Context manager for database connection."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
@@ -212,14 +212,14 @@ class ModelRegistry:
     def register_model(self, name: str, algorithm: str, framework: str = "sklearn",
                       author: str = "system", description: str = "",
                       tags: List[str] = None) -> str:
-        """Registra um novo modelo."""
+        """Register a new model."""
         with self.lock:
-            # Gerar ID único
+            # Generate unique ID
             model_id = f"{name}_{hashlib.md5(name.encode()).hexdigest()[:8]}"
             
             try:
                 with self._get_db_connection() as conn:
-                    # Verificar se modelo já existe
+                    # Check if model already exists
                     existing = conn.execute(
                         "SELECT model_id FROM models WHERE model_id = ?",
                         (model_id,)
@@ -229,7 +229,7 @@ class ModelRegistry:
                         self.logger.info(f"Model {model_id} already exists")
                         return model_id
                     
-                    # Inserir modelo
+                    # Insert model
                     now = datetime.now().isoformat()
                     conn.execute('''
                         INSERT INTO models (model_id, name, latest_version, stage, status, created_at, updated_at)
@@ -262,13 +262,13 @@ class ModelRegistry:
                       validation_results: Dict[str, Any] = None,
                       description: str = "",
                       tags: List[str] = None) -> ModelVersion:
-        """Cria nova versão do modelo."""
+        """Create new model version."""
         with self.lock:
             try:
-                # Obter próxima versão
+                # Get next version
                 version = self._get_next_version(model_id)
                 
-                # Criar metadados
+                # Create metadata
                 with self._get_db_connection() as conn:
                     model_info = conn.execute(
                         "SELECT name FROM models WHERE model_id = ?",
@@ -284,7 +284,7 @@ class ModelRegistry:
                     name=model_name,
                     version=version,
                     algorithm=type(model_object).__name__,
-                    framework="sklearn",  # Detectar automaticamente
+                    framework="sklearn",  # Detect automatically
                     author="system",
                     description=description,
                     tags=tags or [],
@@ -296,20 +296,20 @@ class ModelRegistry:
                     updated_at=datetime.now()
                 )
                 
-                # Salvar artefatos
+                # Save artifacts
                 artifacts = self._save_artifacts(model_id, version, model_object)
                 
-                # Calcular checksum
+                # Calculate checksum
                 checksum = self._calculate_checksum(artifacts)
                 
-                # Calcular tamanho
+                # Calculate size
                 size_bytes = sum(
                     Path(path).stat().st_size 
                     for path in artifacts.values() 
                     if Path(path).exists()
                 )
                 
-                # Criar versão
+                # Create version
                 model_version = ModelVersion(
                     model_id=model_id,
                     version=version,
@@ -323,10 +323,10 @@ class ModelRegistry:
                     checksum=checksum
                 )
                 
-                # Salvar no banco
+                # Save to database
                 self._save_version_to_db(model_version)
                 
-                # Atualizar modelo principal
+                # Update main model
                 self._update_model_latest_version(model_id, version)
                 
                 self.struct_logger.info(
@@ -344,11 +344,11 @@ class ModelRegistry:
                 raise
     
     def get_model_version(self, model_id: str, version: str = None) -> Optional[ModelVersion]:
-        """Obtém versão específica do modelo."""
+        """Get specific model version."""
         try:
             with self._get_db_connection() as conn:
                 if version is None:
-                    # Obter última versão
+                    # Get latest version
                     model_info = conn.execute(
                         "SELECT latest_version FROM models WHERE model_id = ?",
                         (model_id,)
@@ -359,7 +359,7 @@ class ModelRegistry:
                     
                     version = model_info['latest_version']
                 
-                # Obter versão específica
+                # Get specific version
                 version_data = conn.execute('''
                     SELECT * FROM model_versions 
                     WHERE model_id = ? AND version = ?
@@ -387,7 +387,7 @@ class ModelRegistry:
             return None
     
     def list_models(self, stage: ModelStage = None, status: ModelStatus = None) -> List[Dict[str, Any]]:
-        """Lista modelos com filtros opcionais."""
+        """List models with optional filters."""
         try:
             with self._get_db_connection() as conn:
                 query = "SELECT * FROM models WHERE 1=1"
@@ -407,7 +407,7 @@ class ModelRegistry:
                 for row in results:
                     model_dict = dict(row)
                     
-                    # Adicionar informações da última versão
+                    # Add latest version information
                     latest_version = self.get_model_version(model_dict['model_id'])
                     if latest_version:
                         model_dict['latest_performance'] = latest_version.performance_metrics
@@ -422,7 +422,7 @@ class ModelRegistry:
             return []
     
     def list_versions(self, model_id: str) -> List[ModelVersion]:
-        """Lista todas as versões de um modelo."""
+        """List all versions of a model."""
         try:
             with self._get_db_connection() as conn:
                 results = conn.execute('''
@@ -456,17 +456,17 @@ class ModelRegistry:
     
     def promote_version(self, model_id: str, version: str, 
                        target_stage: ModelStage) -> bool:
-        """Promove versão para estágio superior."""
+        """Promote version to higher stage."""
         try:
             with self._get_db_connection() as conn:
-                # Atualizar estágio
+                # Update stage
                 conn.execute('''
                     UPDATE model_versions 
                     SET stage = ? 
                     WHERE model_id = ? AND version = ?
                 ''', (target_stage.value, model_id, version))
                 
-                # Se promovendo para produção, despromover outras versões
+                # If promoting to production, demote other versions
                 if target_stage == ModelStage.PRODUCTION:
                     conn.execute('''
                         UPDATE model_versions 
@@ -490,14 +490,14 @@ class ModelRegistry:
             return False
     
     def load_model(self, model_id: str, version: str = None) -> Optional[Any]:
-        """Carrega modelo do registry."""
+        """Load model from registry."""
         try:
             model_version = self.get_model_version(model_id, version)
             
             if not model_version:
                 return None
             
-            # Carregar modelo principal
+            # Load main model
             model_path = model_version.artifacts.get("model")
             if not model_path or not Path(model_path).exists():
                 self.logger.error(f"Model file not found: {model_path}")
@@ -519,10 +519,10 @@ class ModelRegistry:
             return None
     
     def delete_version(self, model_id: str, version: str) -> bool:
-        """Remove versão específica."""
+        """Remove specific version."""
         try:
             with self._get_db_connection() as conn:
-                # Obter informações da versão
+                # Get version information
                 version_data = conn.execute('''
                     SELECT artifacts FROM model_versions 
                     WHERE model_id = ? AND version = ?
@@ -531,7 +531,7 @@ class ModelRegistry:
                 if not version_data:
                     return False
                 
-                # Remover artefatos
+                # Remove artifacts
                 artifacts = json.loads(version_data['artifacts'])
                 for artifact_path in artifacts.values():
                     try:
@@ -539,7 +539,7 @@ class ModelRegistry:
                     except Exception as e:
                         self.logger.warning(f"Could not delete artifact {artifact_path}: {e}")
                 
-                # Remover do banco
+                # Remove from database
                 conn.execute('''
                     DELETE FROM model_versions 
                     WHERE model_id = ? AND version = ?
@@ -560,7 +560,7 @@ class ModelRegistry:
             return False
     
     def _get_next_version(self, model_id: str) -> str:
-        """Obtém próximo número de versão."""
+        """Get next version number."""
         try:
             with self._get_db_connection() as conn:
                 result = conn.execute('''
@@ -573,12 +573,12 @@ class ModelRegistry:
                 if not result:
                     return "1.0.0"
                 
-                # Incrementar versão (simplificado)
+                # Increment version (simplified)
                 current_version = result['version']
                 parts = current_version.split('.')
                 major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
                 
-                # Incrementar patch
+                # Increment patch
                 return f"{major}.{minor}.{patch + 1}"
                 
         except Exception as e:
@@ -586,24 +586,24 @@ class ModelRegistry:
             return "1.0.0"
     
     def _save_artifacts(self, model_id: str, version: str, model_object: Any) -> Dict[str, str]:
-        """Salva artefatos do modelo."""
+        """Save model artifacts."""
         version_dir = self.artifacts_dir / model_id / version
         version_dir.mkdir(parents=True, exist_ok=True)
         
         artifacts = {}
         
-        # Salvar modelo principal
+        # Save main model
         model_path = version_dir / "model.joblib"
         joblib.dump(model_object, model_path)
         artifacts["model"] = str(model_path)
         
-        # Salvar scaler se existir
+        # Save scaler if exists
         if hasattr(model_object, 'scaler') and model_object.scaler:
             scaler_path = version_dir / "scaler.joblib"
             joblib.dump(model_object.scaler, scaler_path)
             artifacts["scaler"] = str(scaler_path)
         
-        # Salvar explainer se existir
+        # Save explainer if exists
         if hasattr(model_object, 'explainer') and model_object.explainer:
             explainer_path = version_dir / "explainer.joblib"
             joblib.dump(model_object.explainer, explainer_path)
@@ -612,7 +612,7 @@ class ModelRegistry:
         return artifacts
     
     def _calculate_checksum(self, artifacts: Dict[str, str]) -> str:
-        """Calcula checksum dos artefatos."""
+        """Calculate artifacts checksum."""
         hash_md5 = hashlib.md5()
         
         for artifact_path in sorted(artifacts.values()):
@@ -624,7 +624,7 @@ class ModelRegistry:
         return hash_md5.hexdigest()
     
     def _save_version_to_db(self, model_version: ModelVersion):
-        """Salva versão no banco de dados."""
+        """Save version to database."""
         with self._get_db_connection() as conn:
             conn.execute('''
                 INSERT INTO model_versions 
@@ -649,7 +649,7 @@ class ModelRegistry:
             conn.commit()
     
     def _update_model_latest_version(self, model_id: str, version: str):
-        """Atualiza última versão do modelo."""
+        """Update model latest version."""
         with self._get_db_connection() as conn:
             conn.execute('''
                 UPDATE models 
@@ -660,7 +660,7 @@ class ModelRegistry:
             conn.commit()
     
     def get_registry_stats(self) -> Dict[str, Any]:
-        """Obtém estatísticas do registry."""
+        """Get registry statistics."""
         try:
             with self._get_db_connection() as conn:
                 # Contadores básicos

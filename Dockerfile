@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y \
 # Criar diretório de trabalho
 WORKDIR /app
 
-# Copiar requirements e instalar dependências Python
+# Copiar apenas requirements.txt primeiro para aproveitar cache do Docker
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -44,8 +44,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Criar diretório de trabalho
 WORKDIR /app
 
-# Copiar código da aplicação
-COPY . .
+# Copiar apenas arquivos necessários para a aplicação (não usar COPY . . por segurança e eficiência)
+COPY src/ /app/src/
+COPY frontend.py /app/frontend.py
 
 # Criar diretórios necessários
 RUN mkdir -p uploads models reports temp logs && \
