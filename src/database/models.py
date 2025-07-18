@@ -116,6 +116,7 @@ class EvaluationResult(Base):
     mape = Column(Float)
     nbr_grade = Column(String(20))  # Superior, Normal, Inferior, Inadequado
     compliance_score = Column(Float)
+    valuation_standard = Column(String(50), default='NBR 14653')  # Novo campo
     
     # Metadados
     total_records = Column(Integer)

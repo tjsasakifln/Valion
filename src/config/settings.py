@@ -70,6 +70,10 @@ class ModelSettings:
     max_features: int = 20
     random_state: int = 42
     
+    # Configurações de norma de avaliação
+    default_valuation_standard: str = "NBR 14653"
+    supported_valuation_standards: List[str] = field(default_factory=lambda: ["NBR 14653", "USPAP", "EVS"])
+    
     # Parâmetros Elastic Net
     alpha_range: List[float] = field(default_factory=lambda: [0.001, 0.01, 0.1, 1.0, 10.0])
     l1_ratio_range: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.5, 0.7, 0.9])
@@ -200,7 +204,8 @@ class Settings:
             test_size=float(os.getenv("TEST_SIZE", "0.2")),
             cv_folds=int(os.getenv("CV_FOLDS", "5")),
             max_features=int(os.getenv("MAX_FEATURES", "20")),
-            random_state=int(os.getenv("RANDOM_STATE", "42"))
+            random_state=int(os.getenv("RANDOM_STATE", "42")),
+            default_valuation_standard=os.getenv("DEFAULT_VALUATION_STANDARD", "NBR 14653")
         )
         
         # API
@@ -334,6 +339,8 @@ class Settings:
             'cv_folds': self.model.cv_folds,
             'max_features': self.model.max_features,
             'random_state': self.model.random_state,
+            'default_valuation_standard': self.model.default_valuation_standard,
+            'supported_valuation_standards': self.model.supported_valuation_standards,
             'alpha_range': self.model.alpha_range,
             'l1_ratio_range': self.model.l1_ratio_range,
             'max_iter': self.model.max_iter,
@@ -347,6 +354,33 @@ class Settings:
             'max_vif': self.model.max_vif,
             'max_outliers_percent': self.model.max_outliers_percent
         }
+    
+    def get_validation_standard(self, preferred_standard: Optional[str] = None) -> str:
+        """
+        Retorna a norma de validação a ser usada.
+        
+        Args:
+            preferred_standard: Norma preferida (se suportada)
+            
+        Returns:
+            Norma de validação a ser usada
+        """
+        if preferred_standard and preferred_standard in self.model.supported_valuation_standards:
+            return preferred_standard
+        
+        return self.model.default_valuation_standard
+    
+    def is_valuation_standard_supported(self, standard: str) -> bool:
+        """
+        Verifica se uma norma de avaliação é suportada.
+        
+        Args:
+            standard: Norma de avaliação
+            
+        Returns:
+            True se a norma é suportada
+        """
+        return standard in self.model.supported_valuation_standards
     
     def save_to_file(self, filepath: str):
         """
@@ -390,6 +424,13 @@ class Settings:
         
         if self.model.cv_folds < 3:
             errors.append("Número de folds deve ser >= 3")
+        
+        # Validar configurações de norma de avaliação
+        if self.model.default_valuation_standard not in self.model.supported_valuation_standards:
+            errors.append(f"Norma de avaliação padrão '{self.model.default_valuation_standard}' não está na lista de normas suportadas")
+        
+        if not self.model.supported_valuation_standards:
+            errors.append("Lista de normas de avaliação suportadas não pode estar vazia")
         
         # Validar thresholds NBR
         if not (0.0 <= self.model.r2_inferior <= self.model.r2_normal <= self.model.r2_superior <= 1.0):

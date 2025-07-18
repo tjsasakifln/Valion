@@ -43,18 +43,167 @@ class LocationAnalysis:
 class GeospatialAnalyzer:
     """Analisador geoespacial para dados imobiliários."""
     
-    def __init__(self, city_center: Optional[Tuple[float, float]] = None):
+    def __init__(self, city_center: Optional[Tuple[float, float]] = None, region: str = "Brazil"):
         self.logger = logging.getLogger(__name__)
+        self.region = region
         self.geocoder = Nominatim(user_agent="valion_geospatial")
         
-        # Coordenadas padrão do centro (São Paulo)
-        self.city_center = city_center or (-23.5505, -46.6333)
+        # Configurações regionais
+        self.regional_config = self._get_regional_config()
+        
+        # Coordenadas do centro baseadas na região
+        self.city_center = city_center or self.regional_config['default_city_center']
         
         # Cache para geocodificação
         self.geocode_cache = {}
         
-        # POIs (Points of Interest) simulados
-        self.pois = self._load_default_pois()
+        # POIs (Points of Interest) baseados na região
+        self.pois = self._load_regional_pois()
+    
+    def _get_regional_config(self) -> Dict[str, Any]:
+        """
+        Obtém configurações regionais para análise geoespacial.
+        
+        Returns:
+            Configurações regionais
+        """
+        regional_configs = {
+            'Brazil': {
+                'default_city_center': (-23.5505, -46.6333),  # São Paulo
+                'city_name': 'São Paulo',
+                'country_code': 'BR',
+                'geocoder_language': 'pt',
+                'density_reference': 50,  # imóveis por km²
+                'poi_categories': ['shopping', 'health', 'education', 'recreation', 'transport', 'finance'],
+                'transport_types': ['metro', 'bus', 'train'],
+                'address_components': ['road', 'neighbourhood', 'city', 'state', 'country']
+            },
+            'United States': {
+                'default_city_center': (40.7128, -74.0060),  # New York
+                'city_name': 'New York',
+                'country_code': 'US',
+                'geocoder_language': 'en',
+                'density_reference': 75,  # properties per km²
+                'poi_categories': ['shopping', 'healthcare', 'education', 'recreation', 'transit', 'finance'],
+                'transport_types': ['subway', 'bus', 'train', 'light_rail'],
+                'address_components': ['house_number', 'road', 'neighbourhood', 'city', 'state', 'country']
+            },
+            'Europe': {
+                'default_city_center': (52.5200, 13.4050),  # Berlin
+                'city_name': 'Berlin',
+                'country_code': 'DE',
+                'geocoder_language': 'en',
+                'density_reference': 60,  # properties per km²
+                'poi_categories': ['shopping', 'healthcare', 'education', 'recreation', 'public_transport', 'finance'],
+                'transport_types': ['metro', 'bus', 'tram', 'train'],
+                'address_components': ['house_number', 'road', 'neighbourhood', 'city', 'state', 'country']
+            }
+        }
+        
+        return regional_configs.get(self.region, regional_configs['Brazil'])
+    
+    def _load_regional_pois(self) -> List[Dict[str, Any]]:
+        """Carrega POIs baseados na região."""
+        region_pois = {
+            'Brazil': [
+                {
+                    "name": "Shopping Iguatemi",
+                    "category": "shopping",
+                    "coordinates": (-23.5489, -46.6388),
+                    "importance": 0.8
+                },
+                {
+                    "name": "Hospital das Clínicas",
+                    "category": "health",
+                    "coordinates": (-23.5505, -46.6442),
+                    "importance": 0.9
+                },
+                {
+                    "name": "USP - Universidade de São Paulo",
+                    "category": "education",
+                    "coordinates": (-23.5574, -46.7311),
+                    "importance": 0.7
+                },
+                {
+                    "name": "Parque Ibirapuera",
+                    "category": "recreation",
+                    "coordinates": (-23.5476, -46.6567),
+                    "importance": 0.6
+                },
+                {
+                    "name": "Estação Sé - Metrô",
+                    "category": "transport",
+                    "coordinates": (-23.5505, -46.6333),
+                    "importance": 1.0
+                }
+            ],
+            'United States': [
+                {
+                    "name": "Times Square",
+                    "category": "shopping",
+                    "coordinates": (40.7580, -73.9855),
+                    "importance": 0.8
+                },
+                {
+                    "name": "Mount Sinai Hospital",
+                    "category": "healthcare",
+                    "coordinates": (40.7903, -73.9523),
+                    "importance": 0.9
+                },
+                {
+                    "name": "Columbia University",
+                    "category": "education",
+                    "coordinates": (40.8075, -73.9626),
+                    "importance": 0.7
+                },
+                {
+                    "name": "Central Park",
+                    "category": "recreation",
+                    "coordinates": (40.7829, -73.9654),
+                    "importance": 0.6
+                },
+                {
+                    "name": "Grand Central Terminal",
+                    "category": "transit",
+                    "coordinates": (40.7527, -73.9772),
+                    "importance": 1.0
+                }
+            ],
+            'Europe': [
+                {
+                    "name": "Potsdamer Platz",
+                    "category": "shopping",
+                    "coordinates": (52.5094, 13.3760),
+                    "importance": 0.8
+                },
+                {
+                    "name": "Charité Hospital",
+                    "category": "healthcare",
+                    "coordinates": (52.5255, 13.3769),
+                    "importance": 0.9
+                },
+                {
+                    "name": "Humboldt University",
+                    "category": "education",
+                    "coordinates": (52.5178, 13.3935),
+                    "importance": 0.7
+                },
+                {
+                    "name": "Tiergarten",
+                    "category": "recreation",
+                    "coordinates": (52.5144, 13.3501),
+                    "importance": 0.6
+                },
+                {
+                    "name": "Hauptbahnhof",
+                    "category": "public_transport",
+                    "coordinates": (52.5251, 13.3694),
+                    "importance": 1.0
+                }
+            ]
+        }
+        
+        return region_pois.get(self.region, region_pois['Brazil'])
         
     def _load_default_pois(self) -> List[Dict[str, Any]]:
         """Carrega POIs padrão para análise."""
@@ -93,7 +242,7 @@ class GeospatialAnalyzer:
     
     def geocode_address(self, address: str) -> Optional[Tuple[float, float]]:
         """
-        Geocodifica um endereço para coordenadas.
+        Geocodifica um endereço para coordenadas com parâmetros regionais.
         
         Args:
             address: Endereço para geocodificar
@@ -105,11 +254,21 @@ class GeospatialAnalyzer:
             return self.geocode_cache[address]
         
         try:
-            location = self.geocoder.geocode(address, timeout=10)
+            # Adicionar parâmetros regionais na geocodificação
+            geocode_params = {
+                'timeout': 10,
+                'language': self.regional_config['geocoder_language'],
+                'country_codes': self.regional_config['country_code']
+            }
+            
+            # Melhorar o endereço com contexto regional se necessário
+            enhanced_address = self._enhance_address_with_context(address)
+            
+            location = self.geocoder.geocode(enhanced_address, **geocode_params)
             if location:
                 coords = (location.latitude, location.longitude)
                 self.geocode_cache[address] = coords
-                self.logger.info(f"Geocodificado: {address} -> {coords}")
+                self.logger.info(f"Geocodificado ({self.region}): {address} -> {coords}")
                 return coords
             else:
                 self.logger.warning(f"Geocodificação falhou para: {address}")
@@ -118,6 +277,25 @@ class GeospatialAnalyzer:
         except Exception as e:
             self.logger.error(f"Erro na geocodificação de {address}: {e}")
             return None
+    
+    def _enhance_address_with_context(self, address: str) -> str:
+        """
+        Melhora o endereço com contexto regional.
+        
+        Args:
+            address: Endereço original
+            
+        Returns:
+            Endereço melhorado com contexto
+        """
+        # Se o endereço não inclui cidade, adicionar cidade padrão
+        city_name = self.regional_config['city_name']
+        if city_name.lower() not in address.lower():
+            enhanced_address = f"{address}, {city_name}"
+        else:
+            enhanced_address = address
+            
+        return enhanced_address
     
     def calculate_distance_to_center(self, coordinates: Tuple[float, float]) -> float:
         """
@@ -189,9 +367,9 @@ class GeospatialAnalyzer:
                 if distance <= radius_km:
                     nearby_count += 1
         
-        # Normalizar baseado em densidade esperada
-        # Assumindo densidade média de 50 imóveis por km²
-        density_score = min(10.0, (nearby_count / 50) * 10)
+        # Normalizar baseado em densidade esperada regional
+        density_reference = self.regional_config['density_reference']
+        density_score = min(10.0, (nearby_count / density_reference) * 10)
         return density_score
     
     def calculate_transport_score(self, coordinates: Tuple[float, float]) -> float:
@@ -556,14 +734,27 @@ class GeospatialAnalyzer:
         return heatmap_data
 
 
-def create_geospatial_analyzer(city_center: Optional[Tuple[float, float]] = None) -> GeospatialAnalyzer:
+def create_geospatial_analyzer(city_center: Optional[Tuple[float, float]] = None, 
+                             valuation_standard: str = "NBR 14653") -> GeospatialAnalyzer:
     """
-    Factory function para criar analisador geoespacial.
+    Cria um analisador geoespacial baseado na norma de avaliação.
     
     Args:
-        city_center: Coordenadas do centro da cidade (lat, lon)
+        city_center: Coordenadas do centro da cidade
+        valuation_standard: Norma de avaliação
         
     Returns:
-        Instância do analisador geoespacial
+        Analisador geoespacial configurado
     """
-    return GeospatialAnalyzer(city_center=city_center)
+    # Mapear norma de avaliação para região
+    standard_to_region = {
+        'NBR 14653': 'Brazil',
+        'USPAP': 'United States',
+        'EVS': 'Europe'
+    }
+    
+    region = standard_to_region.get(valuation_standard, 'Brazil')
+    
+    return GeospatialAnalyzer(city_center=city_center, region=region)
+
+

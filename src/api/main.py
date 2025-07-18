@@ -23,7 +23,8 @@ from src.core.data_loader import DataLoader, DataValidationResult
 import magic
 from src.core.transformations import VariableTransformer, TransformationResult
 from src.core.model_builder import ModelBuilder, ModelResult
-from src.core.nbr14653_validation import NBR14653Validator, NBRValidationResult
+from src.core.validation_strategy import ValidatorFactory, ValidationContext
+from src.core.nbr14653_validation import NBRValidationResult  # For backward compatibility
 from src.core.results_generator import ResultsGenerator, EvaluationReport
 from src.core.geospatial_analysis import create_geospatial_analyzer, LocationAnalysis
 from src.config.settings import Settings
@@ -58,6 +59,7 @@ class EvaluationRequest(BaseModel):
     """Evaluation request."""
     file_path: str
     target_column: str = "value"
+    valuation_standard: str = "NBR 14653"  # Novo campo
     mode: str = "standard"  # "standard" ou "expert"
     config: Optional[Dict[str, Any]] = None
     
@@ -66,11 +68,15 @@ class EvaluationRequest(BaseModel):
         if self.mode not in ["standard", "expert"]:
             raise ValueError("Mode must be 'standard' or 'expert'")
         
-        # Configure expert_mode in config based on mode
+        if self.valuation_standard not in ["NBR 14653", "USPAP", "EVS"]:
+            raise ValueError("Valuation standard must be 'NBR 14653', 'USPAP', or 'EVS'")
+        
+        # Configure expert_mode and valuation_standard in config
         if self.config is None:
             self.config = {}
         
         self.config['expert_mode'] = (self.mode == "expert")
+        self.config['valuation_standard'] = self.valuation_standard
         
         # In expert mode, ensure advanced models are available
         if self.mode == "expert":
@@ -194,6 +200,7 @@ async def create_evaluation(request: EvaluationRequest):
         "task_id": task.id, 
         "status": "started",
         "mode": request.mode,
+        "valuation_standard": request.valuation_standard,
         "expert_mode_active": request.config.get('expert_mode', False)
     }
 
@@ -1176,8 +1183,8 @@ async def analyze_location(request: GeospatialAnalysisRequest):
         if request.city_center_lat and request.city_center_lon:
             city_center = (request.city_center_lat, request.city_center_lon)
         
-        # Criar analisador geoespacial
-        analyzer = create_geospatial_analyzer(city_center=city_center)
+        # Criar analisador geoespacial (usando NBR 14653 como padrão para análise avulsa)
+        analyzer = create_geospatial_analyzer(city_center=city_center, valuation_standard="NBR 14653")
         
         # Verificar se foi fornecido endereço ou coordenadas
         if request.address:
@@ -1248,8 +1255,8 @@ async def enrich_dataset_geospatial(evaluation_id: str, request: DataEnrichmentR
         if request.city_center_lat and request.city_center_lon:
             city_center = (request.city_center_lat, request.city_center_lon)
         
-        # Criar analisador geoespacial
-        analyzer = create_geospatial_analyzer(city_center=city_center)
+        # Criar analisador geoespacial (usando NBR 14653 como padrão para análise avulsa)
+        analyzer = create_geospatial_analyzer(city_center=city_center, valuation_standard="NBR 14653")
         
         # Simular carregamento de dados (em implementação real, carregaria do storage)
         # Por ora, criar dados mockados para demonstração
@@ -1350,7 +1357,7 @@ async def get_geospatial_heatmap(evaluation_id: str):
         df = pd.DataFrame(enriched_data)
         
         # Criar analisador para gerar dados do mapa
-        analyzer = create_geospatial_analyzer()
+        analyzer = create_geospatial_analyzer(valuation_standard="NBR 14653")
         heatmap_data = analyzer.generate_location_heatmap_data(df)
         
         if not heatmap_data:

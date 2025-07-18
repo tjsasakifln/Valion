@@ -72,6 +72,170 @@ class DataLoader:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.logger = logging.getLogger(__name__)
+        self.regional_config = self._get_regional_config()
+    
+    def _get_regional_config(self) -> Dict[str, Any]:
+        """
+        Obtém configurações regionais baseadas na norma de avaliação.
+        
+        Returns:
+            Configurações regionais para formatação de dados
+        """
+        valuation_standard = self.config.get('valuation_standard', 'NBR 14653')
+        
+        regional_configs = {
+            'NBR 14653': {
+                'country': 'Brazil',
+                'decimal_separator': ',',
+                'thousands_separator': '.',
+                'currency_symbol': 'R$',
+                'date_format': '%d/%m/%Y',
+                'encoding_priority': ['utf-8', 'latin1', 'iso-8859-1', 'cp1252'],
+                'column_mapping': {
+                    'valor': ['valor', 'preco', 'price', 'value'],
+                    'area_total': ['area_total', 'area_terreno', 'lot_area', 'land_area'],
+                    'area_privativa': ['area_privativa', 'area_util', 'area_construida', 'built_area', 'floor_area'],
+                    'localizacao': ['localizacao', 'endereco', 'address', 'location'],
+                    'quartos': ['quartos', 'dormitorios', 'bedrooms', 'rooms'],
+                    'banheiros': ['banheiros', 'bathrooms', 'wc'],
+                    'vagas_garagem': ['vagas_garagem', 'vagas', 'garagem', 'parking', 'garage'],
+                    'idade_imovel': ['idade_imovel', 'idade', 'ano_construcao', 'year_built', 'age']
+                }
+            },
+            'USPAP': {
+                'country': 'United States',
+                'decimal_separator': '.',
+                'thousands_separator': ',',
+                'currency_symbol': '$',
+                'date_format': '%m/%d/%Y',
+                'encoding_priority': ['utf-8', 'ascii', 'cp1252'],
+                'column_mapping': {
+                    'valor': ['value', 'price', 'sale_price', 'market_value'],
+                    'area_total': ['lot_area', 'land_area', 'lot_size', 'parcel_size'],
+                    'area_privativa': ['floor_area', 'living_area', 'gross_area', 'building_area'],
+                    'localizacao': ['address', 'location', 'property_address', 'street_address'],
+                    'quartos': ['bedrooms', 'rooms', 'bed_count', 'bedroom_count'],
+                    'banheiros': ['bathrooms', 'bath_count', 'full_baths', 'bathroom_count'],
+                    'vagas_garagem': ['parking', 'garage', 'parking_spaces', 'garage_spaces'],
+                    'idade_imovel': ['year_built', 'age', 'construction_year', 'built_year']
+                }
+            },
+            'EVS': {
+                'country': 'Europe',
+                'decimal_separator': ',',
+                'thousands_separator': '.',
+                'currency_symbol': '€',
+                'date_format': '%d/%m/%Y',
+                'encoding_priority': ['utf-8', 'iso-8859-1', 'cp1252'],
+                'column_mapping': {
+                    'valor': ['value', 'price', 'market_value', 'valuation'],
+                    'area_total': ['plot_area', 'land_area', 'site_area', 'total_area'],
+                    'area_privativa': ['floor_area', 'net_area', 'usable_area', 'internal_area'],
+                    'localizacao': ['address', 'location', 'property_location', 'site_address'],
+                    'quartos': ['bedrooms', 'rooms', 'bedroom_count', 'sleeping_rooms'],
+                    'banheiros': ['bathrooms', 'wc', 'bathroom_count', 'toilets'],
+                    'vagas_garagem': ['parking', 'garage', 'car_spaces', 'parking_spaces'],
+                    'idade_imovel': ['year_built', 'age', 'construction_date', 'built_year']
+                }
+            }
+        }
+        
+        return regional_configs.get(valuation_standard, regional_configs['NBR 14653'])
+    
+    def _normalize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normaliza nomes de colunas baseado na configuração regional.
+        
+        Args:
+            df: DataFrame com colunas originais
+            
+        Returns:
+            DataFrame com colunas normalizadas
+        """
+        df_normalized = df.copy()
+        column_mapping = self.regional_config['column_mapping']
+        
+        # Criar mapeamento reverso: nome original -> nome padrão
+        reverse_mapping = {}
+        for standard_name, variations in column_mapping.items():
+            for variation in variations:
+                # Buscar por correspondência case-insensitive
+                for col in df.columns:
+                    if col.lower().strip() == variation.lower().strip():
+                        reverse_mapping[col] = standard_name
+                        break
+        
+        # Renomear colunas
+        df_normalized = df_normalized.rename(columns=reverse_mapping)
+        
+        # Log das transformações
+        if reverse_mapping:
+            self.logger.info(f"Colunas mapeadas: {reverse_mapping}")
+        
+        return df_normalized
+    
+    def _parse_regional_numbers(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Converte números baseado na configuração regional.
+        
+        Args:
+            df: DataFrame com números em formato regional
+            
+        Returns:
+            DataFrame com números padronizados
+        """
+        df_parsed = df.copy()
+        decimal_sep = self.regional_config['decimal_separator']
+        thousands_sep = self.regional_config['thousands_separator']
+        
+        # Identificar colunas numéricas
+        numeric_columns = ['valor', 'area_total', 'area_privativa', 'quartos', 'banheiros', 'vagas_garagem']
+        numeric_columns = [col for col in numeric_columns if col in df_parsed.columns]
+        
+        for col in numeric_columns:
+            if df_parsed[col].dtype == 'object':
+                # Remover símbolos de moeda se presentes
+                currency_symbol = self.regional_config['currency_symbol']
+                df_parsed[col] = df_parsed[col].astype(str).str.replace(currency_symbol, '', regex=False)
+                
+                # Converter formato regional para formato padrão (ponto como decimal)
+                if decimal_sep != '.':
+                    # Primeiro, remover separadores de milhares
+                    df_parsed[col] = df_parsed[col].str.replace(thousands_sep, '', regex=False)
+                    # Depois, converter separador decimal
+                    df_parsed[col] = df_parsed[col].str.replace(decimal_sep, '.', regex=False)
+                
+                # Converter para numérico
+                df_parsed[col] = pd.to_numeric(df_parsed[col], errors='coerce')
+        
+        return df_parsed
+    
+    def _parse_regional_dates(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Converte datas baseado na configuração regional.
+        
+        Args:
+            df: DataFrame com datas em formato regional
+            
+        Returns:
+            DataFrame com datas padronizadas
+        """
+        df_parsed = df.copy()
+        date_format = self.regional_config['date_format']
+        
+        # Identificar colunas de data
+        date_columns = ['data_transacao', 'data_construcao', 'date_built', 'sale_date']
+        date_columns = [col for col in date_columns if col in df_parsed.columns]
+        
+        for col in date_columns:
+            if df_parsed[col].dtype == 'object':
+                try:
+                    df_parsed[col] = pd.to_datetime(df_parsed[col], format=date_format, errors='coerce')
+                except ValueError:
+                    # Fallback para detecção automática
+                    df_parsed[col] = pd.to_datetime(df_parsed[col], errors='coerce')
+        
+        return df_parsed
         
     def _verify_file_integrity(self, file_path: Path) -> Dict[str, Any]:
         """
@@ -227,8 +391,8 @@ class DataLoader:
                 # Detectar delimitador automaticamente
                 delimiter = self._detect_csv_delimiter(file_path)
                 
-                # Tentar diferentes encodings se necessário
-                encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+                # Tentar diferentes encodings baseado na configuração regional
+                encodings = self.regional_config['encoding_priority']
                 df = None
                 
                 for encoding in encodings:
@@ -267,6 +431,13 @@ class DataLoader:
             unnamed_cols = [col for col in df.columns if 'Unnamed:' in str(col)]
             if unnamed_cols:
                 self.logger.warning(f"Colunas sem nome detectadas: {unnamed_cols}")
+            
+            # Aplicar processamento regional
+            df = self._normalize_column_names(df)
+            df = self._parse_regional_numbers(df)
+            df = self._parse_regional_dates(df)
+            
+            self.logger.info(f"Processamento regional aplicado para {self.regional_config['country']}")
             
             return df
             

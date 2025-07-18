@@ -1,20 +1,24 @@
-# Valion - Real Estate Evaluation Platform
+# Valion - International AI-Powered Real Estate Valuation Platform
 
 [![License: BSL-1.1](https://img.shields.io/badge/License-BSL--1.1-blue.svg)](https://github.com/tjsasakifln/Valion/blob/main/LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
 [![Docker](https://img.shields.io/badge/Docker-enabled-blue.svg)](https://www.docker.com/)
+[![Multi-Standard](https://img.shields.io/badge/Standards-NBR%2014653%20%7C%20USPAP%20%7C%20EVS-orange.svg)](https://github.com/tjsasakifln/Valion)
+[![SHAP](https://img.shields.io/badge/AI-SHAP%20Explainable-brightgreen.svg)](https://shap.readthedocs.io/)
 
-> **Advanced Glass-Box Real Estate Valuation Platform** - Transparent, auditable, and statistically rigorous property evaluation following NBR 14653 standards.
+> **Advanced Glass-Box AI Real Estate Valuation Platform** - Transparent, auditable, and statistically rigorous property evaluation supporting international standards: NBR 14653 (Brazil), USPAP (USA), and EVS (Europe). Features explainable AI, geospatial intelligence, and real-time interactive analysis.
 
 ## 🎯 Key Features
 
-✨ **Complete Transparency** - Every step of the evaluation process is auditable and explainable  
-📊 **NBR 14653 Compliance** - Full battery of statistical tests meeting Brazilian technical standards  
-⚡ **Real-time Processing** - Asynchronous architecture with live progress updates  
-🔬 **Scientific Rigor** - Elastic Net regression with comprehensive statistical validation  
+✨ **Complete Transparency** - Every step of the evaluation process is auditable and explainable with glass-box AI  
+🌍 **Multi-Standard Support** - NBR 14653 (Brazil), USPAP (USA), and EVS (Europe) compliance  
+⚡ **Real-time Processing** - WebSocket-powered asynchronous architecture with live progress updates  
+🔬 **Advanced AI Models** - Elastic Net, XGBoost, Random Forest, and Gradient Boosting with SHAP explainability  
+🗺️ **Geospatial Intelligence** - Multi-region analysis with POI scoring, transport accessibility, and location clustering  
 🏗️ **Enterprise Ready** - Scalable microservices architecture with Docker containerization  
-📈 **Advanced Analytics** - SHAP analysis, geospatial intelligence, and interactive dashboards  
+📈 **Interactive Analytics** - SHAP laboratory, waterfall charts, and real-time simulation capabilities  
+🔄 **Expert Mode** - Advanced ML model selection with interactive step-by-step approval  
 
 ## 🚀 Quick Start
 
@@ -243,6 +247,60 @@ The `src/config/settings.py` file enables detailed configuration of:
 - `WS /ws/{evaluation_id}`: Real-time progress updates
 
 📖 **Interactive Documentation**: http://localhost:8000/docs
+
+## 🗺️ Geospatial Intelligence
+
+### Multi-Region Support
+- **Brazil**: Complete POI database with transport accessibility
+- **United States**: Comprehensive location analysis with market clustering
+- **Europe**: Regional compliance with environmental sustainability factors
+
+### Advanced Location Analytics
+- **POI Scoring**: Automated scoring of nearby amenities and services
+- **Transport Accessibility**: Public and private transport connectivity analysis
+- **Neighborhood Clustering**: Automated classification (Premium Central, Urban Consolidated, etc.)
+- **Distance Analysis**: Proximity-based feature engineering
+- **Heatmap Visualization**: Interactive geographical value mapping
+
+### Location Intelligence Features
+- **Market Segmentation**: Automated geographical market clustering
+- **Accessibility Indexing**: Multi-modal transport accessibility scoring
+- **Amenity Valuation**: Quantified impact of local amenities on property values
+- **Regional Adaptation**: Localized analysis for different international markets
+
+## 🚀 Real-Time Features
+
+### WebSocket Integration
+- **Live Progress Updates**: Real-time evaluation progress tracking
+- **Interactive Step Approval**: Expert mode with manual step-by-step validation
+- **Dynamic Model Updates**: Live model performance monitoring
+- **Instant Feedback**: Immediate response to user interactions
+
+### Interactive Capabilities
+- **SHAP Laboratory**: Real-time feature impact simulation
+- **Live Predictions**: Instant property value predictions
+- **Dynamic Dashboards**: Interactive performance visualization
+- **Real-time Collaboration**: Multi-user evaluation sessions
+
+## 🎯 Use Cases & Market Applications
+
+### Real Estate Professionals
+- **Appraisers**: USPAP/EVS/NBR compliant valuation reports
+- **Property Developers**: Market analysis and feasibility studies
+- **Investment Firms**: Portfolio valuation and risk assessment
+- **Banks & Lenders**: Loan underwriting and collateral evaluation
+
+### Regional Markets
+- **Brazilian Market**: NBR 14653 compliance with local POI data
+- **US Market**: USPAP-compliant methodology with comprehensive market analysis
+- **European Market**: EVS standards with sustainability considerations
+- **Global Applications**: Multi-standard support for international portfolios
+
+### Competitive Advantages
+- **Glass-Box AI**: Unlike black-box solutions, complete transparency in AI decisions
+- **Multi-Standard**: Only platform supporting NBR 14653, USPAP, and EVS simultaneously
+- **Real-Time Intelligence**: Interactive analysis vs. static traditional reports
+- **Geospatial Advanced**: Comprehensive location intelligence beyond basic mapping
 
 ## 🧪 Testing
 

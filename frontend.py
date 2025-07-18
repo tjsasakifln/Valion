@@ -205,20 +205,22 @@ def upload_file(file):
         return result.get("file_path")
     return None
 
-def start_evaluation(file_path: str, target_column: str = "valor"):
+def start_evaluation(file_path: str, target_column: str = "valor", valuation_standard: str = "NBR 14653"):
     """
     Starts evaluation in the API.
     
     Args:
         file_path: File path
         target_column: Target column
+        valuation_standard: Valuation standard
         
     Returns:
         Evaluation ID
     """
     data = {
         "file_path": file_path,
-        "target_column": target_column
+        "target_column": target_column,
+        "valuation_standard": valuation_standard
     }
     
     result = call_api("/evaluations/", method="POST", data=data)
@@ -531,6 +533,13 @@ def show_new_evaluation_page():
                 index=0 if 'valor' not in df.columns else list(df.columns).index('valor')
             )
             
+            # Adicionar seletor de norma
+            valuation_standard = st.selectbox(
+                "Norma de Avaliação",
+                options=["NBR 14653", "USPAP", "EVS"],
+                help="Selecione a norma técnica a ser seguida na avaliação."
+            )
+            
             # Botão para iniciar avaliação
             if st.button("Iniciar Avaliação", type="primary"):
                 with st.spinner("Fazendo upload do arquivo..."):
@@ -540,7 +549,7 @@ def show_new_evaluation_page():
                     st.session_state.uploaded_file_path = file_path
                     
                     with st.spinner("Iniciando avaliação..."):
-                        evaluation_id = start_evaluation(file_path, target_column)
+                        evaluation_id = start_evaluation(file_path, target_column, valuation_standard)
                     
                     if evaluation_id:
                         st.session_state.evaluation_id = evaluation_id
@@ -650,9 +659,11 @@ def show_results_page():
         if st.session_state.evaluation_result:
             result = st.session_state.evaluation_result
             
-            # Grau NBR 14653
-            nbr_grade = result.get('report', {}).get('nbr_validation', {}).get('overall_grade', 'Desconhecido')
-            grade_class = f"grade-{nbr_grade.lower()}"
+            # Grau de Validação
+            validation_data = result.get('report', {}).get('validation_summary', {})
+            validation_grade = validation_data.get('overall_grade', 'Desconhecido')
+            validation_standard = validation_data.get('standard', 'NBR 14653')
+            grade_class = f"grade-{validation_grade.lower()}"
             
             st.markdown(f"""
             <div class="nbr-grade {grade_class}">
@@ -699,7 +710,7 @@ def show_executive_summary(result: Dict[str, Any]):
     
     report = result.get('report', {})
     performance = report.get('model_performance', {}).get('performance_metrics', {})
-    nbr = report.get('nbr_validation', {})
+    validation_data = report.get('validation_summary', {})
     
     # Métricas principais
     col1, col2, col3, col4 = st.columns(4)
@@ -765,7 +776,7 @@ def show_nbr_tests(result: Dict[str, Any]):
     
     st.subheader("Testes NBR 14653")
     
-    nbr_data = result.get('report', {}).get('nbr_validation', {})
+    validation_data = result.get('report', {}).get('validation_summary', {})
     
     # Gráfico dos testes
     fig = create_nbr_tests_chart(nbr_data)

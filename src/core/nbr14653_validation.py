@@ -14,35 +14,20 @@ from dataclasses import dataclass
 import logging
 import warnings
 from sklearn.exceptions import ConvergenceWarning
+from .validation_strategy import Validator, ValidationResult, ValidationTestResult
 
 
-@dataclass
-class NBRTestResult:
-    """Resultado de um teste NBR 14653 com tratamento de casos especiais."""
-    test_name: str
-    passed: bool
-    value: Union[float, str]  # Permitir 'N/A' para testes não aplicáveis
-    threshold: float
-    description: str
-    recommendation: str
-    applicable: bool = True  # Se o teste é aplicável aos dados
-    warning: Optional[str] = None  # Avisos sobre limitações do teste
+# Legacy aliases for backward compatibility
+NBRTestResult = ValidationTestResult
+NBRValidationResult = ValidationResult
 
 
-@dataclass
-class NBRValidationResult:
-    """Resultado completo da validação NBR 14653."""
-    overall_grade: str  # Superior, Normal, Inferior
-    individual_tests: List[NBRTestResult]
-    summary: Dict[str, Any]
-    compliance_score: float
-
-
-class NBR14653Validator:
+class NBR14653Validator(Validator):
     """Validador conforme NBR 14653 para avaliação imobiliária."""
     
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
+    def __init__(self, model, X_train: pd.DataFrame, y_train: pd.Series, 
+                 X_test: pd.DataFrame, y_test: pd.Series, config: Dict[str, Any]):
+        super().__init__(model, X_train, y_train, X_test, y_test, config)
         self.logger = logging.getLogger(__name__)
         
         # Thresholds NBR 14653
@@ -89,7 +74,7 @@ class NBR14653Validator:
             grade = "Inadequado"
             passed = False
         
-        return NBRTestResult(
+        return ValidationTestResult(
             test_name="Coeficiente de Determinação (R²)",
             passed=passed,
             value=r2,
@@ -118,7 +103,7 @@ class NBR14653Validator:
             
             # Verificar se o modelo tem coeficientes (necessário para teste F)
             if not hasattr(model, 'coef_'):
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste F de Significância",
                     passed=False,
                     value="N/A",
@@ -134,7 +119,7 @@ class NBR14653Validator:
             
             # Verificar se há graus de liberdade suficientes
             if n <= k + 1:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste F de Significância",
                     passed=False,
                     value="N/A",
@@ -149,7 +134,7 @@ class NBR14653Validator:
             
             # Verificar divisão por zero
             if mse_model == 0 or mse_total == 0:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste F de Significância",
                     passed=False,
                     value="N/A",
@@ -163,7 +148,7 @@ class NBR14653Validator:
             
             # Verificar se F-statistic é válida
             if np.isnan(f_stat) or np.isinf(f_stat) or f_stat < 0:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste F de Significância",
                     passed=False,
                     value="N/A",
@@ -178,7 +163,7 @@ class NBR14653Validator:
             
             passed = p_value < self.thresholds['f_test_p_value']
             
-            return NBRTestResult(
+            return ValidationTestResult(
                 test_name="Teste F de Significância",
                 passed=passed,
                 value=p_value,
@@ -189,7 +174,7 @@ class NBR14653Validator:
             
         except Exception as e:
             self.logger.error(f"Erro no teste F: {e}")
-            return NBRTestResult(
+            return ValidationTestResult(
                 test_name="Teste F de Significância",
                 passed=False,
                 value="N/A",
@@ -217,7 +202,7 @@ class NBR14653Validator:
         try:
             # Verificar se o modelo tem coeficientes
             if not hasattr(model, 'coef_'):
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste t dos Coeficientes",
                     passed=False,
                     value="N/A",
@@ -232,7 +217,7 @@ class NBR14653Validator:
             
             # Verificar se MSE é válido
             if mse == 0 or np.isnan(mse):
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste t dos Coeficientes",
                     passed=False,
                     value="N/A",
@@ -251,7 +236,7 @@ class NBR14653Validator:
                 # Verificar condição da matriz
                 condition_number = np.linalg.cond(xtx)
                 if condition_number > 1e12:
-                    return NBRTestResult(
+                    return ValidationTestResult(
                         test_name="Teste t dos Coeficientes",
                         passed=False,
                         value="N/A",
@@ -266,7 +251,7 @@ class NBR14653Validator:
                 se_coef = np.sqrt(mse * np.diag(xtx_inv))
                 
             except np.linalg.LinAlgError:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste t dos Coeficientes",
                     passed=False,
                     value="N/A",
@@ -278,7 +263,7 @@ class NBR14653Validator:
             
             # Verificar se erro padrão é válido
             if np.any(se_coef == 0) or np.any(np.isnan(se_coef)):
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste t dos Coeficientes",
                     passed=False,
                     value="N/A",
@@ -294,7 +279,7 @@ class NBR14653Validator:
             # Verificar graus de liberdade
             df = len(y_train) - len(model.coef_) - 1
             if df <= 0:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste t dos Coeficientes",
                     passed=False,
                     value="N/A",
@@ -312,7 +297,7 @@ class NBR14653Validator:
             total_coefs = len(model.coef_)
             
             if total_coefs == 0:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Teste t dos Coeficientes",
                     passed=False,
                     value="N/A",
@@ -329,7 +314,7 @@ class NBR14653Validator:
             if significance_ratio < 0.3:
                 warning = "Muito poucos coeficientes significativos - modelo pode estar mal especificado"
             
-            return NBRTestResult(
+            return ValidationTestResult(
                 test_name="Teste t dos Coeficientes",
                 passed=passed,
                 value=significance_ratio,
@@ -341,7 +326,7 @@ class NBR14653Validator:
             
         except Exception as e:
             self.logger.error(f"Erro no teste t: {e}")
-            return NBRTestResult(
+            return ValidationTestResult(
                 test_name="Teste t dos Coeficientes",
                 passed=False,
                 value="N/A",
@@ -370,7 +355,7 @@ class NBR14653Validator:
             
             # Verificar se há resíduos suficientes
             if len(residuals) < 3:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Normalidade dos Resíduos",
                     passed=False,
                     value="N/A",
@@ -382,7 +367,7 @@ class NBR14653Validator:
             
             # Verificar variância zero
             if np.var(residuals) == 0:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Normalidade dos Resíduos",
                     passed=False,
                     value="N/A",
@@ -402,7 +387,7 @@ class NBR14653Validator:
                 warning = None
             
             if len(residuals_clean) < 3:
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Normalidade dos Resíduos",
                     passed=False,
                     value="N/A",
@@ -427,7 +412,7 @@ class NBR14653Validator:
                     stat, p_value = stats.shapiro(residuals_clean)
                     test_name = "Normalidade dos Resíduos (Shapiro-Wilk)"
                 except Exception as e:
-                    return NBRTestResult(
+                    return ValidationTestResult(
                         test_name="Normalidade dos Resíduos",
                         passed=False,
                         value="N/A",
@@ -454,7 +439,7 @@ class NBR14653Validator:
             
             # Verificar se resultados são válidos
             if np.isnan(stat) or np.isnan(p_value):
-                return NBRTestResult(
+                return ValidationTestResult(
                     test_name="Normalidade dos Resíduos",
                     passed=False,
                     value="N/A",
@@ -470,7 +455,7 @@ class NBR14653Validator:
             if p_value < 0.001 and warning is None:
                 warning = "Forte evidência contra normalidade - considere transformações"
             
-            return NBRTestResult(
+            return ValidationTestResult(
                 test_name=test_name,
                 passed=passed,
                 value=p_value,
@@ -482,7 +467,7 @@ class NBR14653Validator:
             
         except Exception as e:
             self.logger.error(f"Erro no teste de normalidade: {e}")
-            return NBRTestResult(
+            return ValidationTestResult(
                 test_name="Normalidade dos Resíduos",
                 passed=False,
                 value="N/A",
@@ -515,7 +500,7 @@ class NBR14653Validator:
         passed = (self.thresholds['durbin_watson_lower'] <= dw_stat <= 
                  self.thresholds['durbin_watson_upper'])
         
-        return NBRTestResult(
+        return ValidationTestResult(
             test_name="Teste de Autocorrelação (Durbin-Watson)",
             passed=passed,
             value=dw_stat,
@@ -557,7 +542,7 @@ class NBR14653Validator:
         max_vif = max(vif_values)
         passed = max_vif < self.thresholds['max_vif']
         
-        return NBRTestResult(
+        return ValidationTestResult(
             test_name="Teste de Multicolinearidade (VIF)",
             passed=passed,
             value=max_vif,
@@ -579,7 +564,7 @@ class NBR14653Validator:
         sample_size = len(df)
         passed = sample_size >= self.thresholds['min_sample_size']
         
-        return NBRTestResult(
+        return ValidationTestResult(
             test_name="Tamanho da Amostra",
             passed=passed,
             value=sample_size,
@@ -621,7 +606,7 @@ class NBR14653Validator:
         # Aprovar se menos de 10% das predições são extrapolações
         passed = extrapolation_rate < 0.1
         
-        return NBRTestResult(
+        return ValidationTestResult(
             test_name="Teste de Extrapolação",
             passed=passed,
             value=extrapolation_rate,
@@ -667,7 +652,7 @@ class NBR14653Validator:
         # Aprovar se taxa de cobertura está próxima do nível de confiança
         passed = abs(coverage_rate - confidence_level) < 0.05
         
-        return NBRTestResult(
+        return ValidationTestResult(
             test_name=f"Intervalos de Predição ({confidence_level:.0%})",
             passed=passed,
             value=coverage_rate,
@@ -708,7 +693,7 @@ class NBR14653Validator:
         # Homoscedasticidade se p-value > 0.05
         passed = p_value > 0.05
         
-        return NBRTestResult(
+        return ValidationTestResult(
             test_name="Teste de Homoscedasticidade (Breusch-Pagan)",
             passed=passed,
             value=p_value,
@@ -717,18 +702,11 @@ class NBR14653Validator:
             recommendation="p-value > 0.05 indica homoscedasticidade"
         )
     
-    def validate_model(self, model, X_train: pd.DataFrame, X_test: pd.DataFrame,
-                      y_train: pd.Series, y_test: pd.Series, 
-                      X_predict: Optional[pd.DataFrame] = None) -> NBRValidationResult:
+    def validate(self, X_predict: Optional[pd.DataFrame] = None) -> ValidationResult:
         """
         Executa bateria completa de testes NBR 14653 com tratamento robusto de casos especiais.
         
         Args:
-            model: Modelo treinado
-            X_train: Features de treino
-            X_test: Features de teste
-            y_train: Target de treino
-            y_test: Target de teste
             X_predict: Features para predição (opcional, para teste de extrapolação)
             
         Returns:
@@ -738,14 +716,14 @@ class NBR14653Validator:
         
         # Executar todos os testes com tratamento de erro
         test_functions = [
-            ("R²", lambda: self.test_coefficient_determination(model, X_test, y_test)),
-            ("F", lambda: self.test_f_significance(model, X_train, y_train)),
-            ("Coeficientes", lambda: self.test_coefficients_significance(model, X_train, y_train)),
-            ("Normalidade", lambda: self.test_residuals_normality(model, X_test, y_test)),
-            ("Autocorrelação", lambda: self.test_autocorrelation(model, X_test, y_test)),
-            ("Multicolinearidade", lambda: self.test_multicollinearity(X_train)),
-            ("Homoscedasticidade", lambda: self.test_homoscedasticity(model, X_test, y_test)),
-            ("Intervalos", lambda: self.test_prediction_intervals(model, X_test, y_test))
+            ("R²", lambda: self.test_coefficient_determination(self.model, self.X_test, self.y_test)),
+            ("F", lambda: self.test_f_significance(self.model, self.X_train, self.y_train)),
+            ("Coeficientes", lambda: self.test_coefficients_significance(self.model, self.X_train, self.y_train)),
+            ("Normalidade", lambda: self.test_residuals_normality(self.model, self.X_test, self.y_test)),
+            ("Autocorrelação", lambda: self.test_autocorrelation(self.model, self.X_test, self.y_test)),
+            ("Multicolinearidade", lambda: self.test_multicollinearity(self.X_train)),
+            ("Homoscedasticidade", lambda: self.test_homoscedasticity(self.model, self.X_test, self.y_test)),
+            ("Intervalos", lambda: self.test_prediction_intervals(self.model, self.X_test, self.y_test))
         ]
         
         for test_name, test_func in test_functions:
@@ -755,7 +733,7 @@ class NBR14653Validator:
             except Exception as e:
                 self.logger.error(f"Erro no teste {test_name}: {e}")
                 # Adicionar resultado de falha
-                tests.append(NBRTestResult(
+                tests.append(ValidationTestResult(
                     test_name=f"Teste {test_name}",
                     passed=False,
                     value="N/A",
@@ -767,11 +745,11 @@ class NBR14653Validator:
         
         # Teste de tamanho da amostra
         try:
-            df_combined = pd.concat([X_train, X_test])
+            df_combined = pd.concat([self.X_train, self.X_test])
             tests.append(self.test_sample_size(df_combined))
         except Exception as e:
             self.logger.error(f"Erro no teste de tamanho da amostra: {e}")
-            tests.append(NBRTestResult(
+            tests.append(ValidationTestResult(
                 test_name="Tamanho da Amostra",
                 passed=False,
                 value="N/A",
@@ -784,10 +762,10 @@ class NBR14653Validator:
         # Teste de extrapolação se dados de predição fornecidos
         if X_predict is not None and len(X_predict) > 0:
             try:
-                tests.append(self.test_extrapolation_range(model, X_train, X_predict))
+                tests.append(self.test_extrapolation_range(self.model, self.X_train, X_predict))
             except Exception as e:
                 self.logger.error(f"Erro no teste de extrapolação: {e}")
-                tests.append(NBRTestResult(
+                tests.append(ValidationTestResult(
                     test_name="Teste de Extrapolação",
                     passed=False,
                     value="N/A",
@@ -849,14 +827,15 @@ class NBR14653Validator:
         
         self.logger.info(f"Validação NBR 14653 concluída: {overall_grade} ({compliance_score:.2%} conformidade, {len(applicable_tests)}/{len(tests)} testes aplicáveis)")
         
-        return NBRValidationResult(
+        return ValidationResult(
+            standard="NBR 14653",
             overall_grade=overall_grade,
             individual_tests=tests,
             summary=summary,
             compliance_score=compliance_score
         )
     
-    def generate_validation_report(self, validation_result: NBRValidationResult) -> str:
+    def generate_validation_report(self, validation_result: ValidationResult) -> str:
         """
         Gera relatório textual da validação NBR 14653.
         
@@ -885,7 +864,10 @@ class NBR14653Validator:
         for test in validation_result.individual_tests:
             status = "✓ PASSOU" if test.passed else "✗ FALHOU"
             report.append(f"{test.test_name}: {status}")
-            report.append(f"  Valor: {test.value:.4f} (Limiar: {test.threshold:.4f})")
+            if isinstance(test.value, (int, float)):
+                report.append(f"  Valor: {test.value:.4f} (Limiar: {test.threshold:.4f})")
+            else:
+                report.append(f"  Valor: {test.value}")
             report.append(f"  {test.description}")
             report.append(f"  Recomendação: {test.recommendation}")
             report.append("")

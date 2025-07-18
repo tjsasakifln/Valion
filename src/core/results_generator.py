@@ -22,7 +22,7 @@ class EvaluationReport:
     data_summary: Dict[str, Any]
     transformation_summary: Dict[str, Any]
     model_performance: Dict[str, Any]
-    nbr_validation: Dict[str, Any]
+    validation_summary: Dict[str, Any]
     predictions: Dict[str, Any]
     methodology: Dict[str, Any]
     conclusions: Dict[str, Any]
@@ -396,42 +396,61 @@ class ResultsGenerator:
             'interpretation': 'high' if consistency_score > 0.7 else 'medium' if consistency_score > 0.5 else 'low'
         }
     
-    def generate_nbr_summary(self, nbr_result) -> Dict[str, Any]:
+    def generate_validation_summary(self, validation_result) -> Dict[str, Any]:
         """
-        Gera resumo da validação NBR 14653.
+        Gera resumo da validação conforme norma especificada.
         
         Args:
-            nbr_result: Resultado da validação NBR
+            validation_result: Resultado da validação (NBR 14653, USPAP, EVS)
             
         Returns:
             Resumo da validação
         """
         summary = {
-            'overall_grade': nbr_result.overall_grade,
-            'compliance_score': nbr_result.compliance_score,
-            'summary_statistics': nbr_result.summary,
-            'individual_tests': [
-                {
-                    'test_name': test.test_name,
-                    'passed': test.passed,
-                    'value': test.value,
-                    'threshold': test.threshold,
-                    'description': test.description,
-                    'recommendation': test.recommendation
-                }
-                for test in nbr_result.individual_tests
-            ],
+            'standard': validation_result.standard,
+            'overall_grade': validation_result.overall_grade,
+            'compliance_score': validation_result.compliance_score,
+            'summary_statistics': validation_result.summary,
+            'individual_tests': [asdict(test) for test in validation_result.individual_tests],
             'compliance_analysis': {
-                'passed_tests': [test.test_name for test in nbr_result.individual_tests if test.passed],
-                'failed_tests': [test.test_name for test in nbr_result.individual_tests if not test.passed],
-                'critical_issues': [
-                    test.test_name for test in nbr_result.individual_tests
-                    if not test.passed and 'R²' in test.test_name
-                ]
+                'passed_tests': [test.test_name for test in validation_result.individual_tests if test.passed],
+                'failed_tests': [test.test_name for test in validation_result.individual_tests if not test.passed],
+                'critical_issues': self._identify_critical_issues(validation_result)
             }
         }
         
         return summary
+    
+    def _identify_critical_issues(self, validation_result) -> List[str]:
+        """
+        Identifica problemas críticos baseados na norma.
+        
+        Args:
+            validation_result: Resultado da validação
+            
+        Returns:
+            Lista de problemas críticos
+        """
+        critical_issues = []
+        
+        # Critérios críticos por norma
+        if validation_result.standard == "NBR 14653":
+            critical_issues = [
+                test.test_name for test in validation_result.individual_tests
+                if not test.passed and 'R²' in test.test_name
+            ]
+        elif validation_result.standard == "USPAP":
+            critical_issues = [
+                test.test_name for test in validation_result.individual_tests
+                if not test.passed and ('R²' in test.test_name or 'Bias' in test.test_name)
+            ]
+        elif validation_result.standard == "EVS":
+            critical_issues = [
+                test.test_name for test in validation_result.individual_tests
+                if not test.passed and ('R²' in test.test_name or 'Accuracy' in test.test_name)
+            ]
+        
+        return critical_issues
     
     def generate_predictions(self, model_result, sample_data: pd.DataFrame) -> Dict[str, Any]:
         """
@@ -570,13 +589,13 @@ class ResultsGenerator:
         
         return methodology
     
-    def generate_conclusions(self, model_result, nbr_result) -> Dict[str, Any]:
+    def generate_conclusions(self, model_result, validation_result) -> Dict[str, Any]:
         """
         Gera conclusões da avaliação.
         
         Args:
             model_result: Resultado do modelo
-            nbr_result: Resultado da validação NBR
+            validation_result: Resultado da validação conforme norma
             
         Returns:
             Conclusões da avaliação
@@ -585,18 +604,18 @@ class ResultsGenerator:
         
         conclusions = {
             'model_adequacy': {
-                'overall_assessment': nbr_result.overall_grade,
+                'overall_assessment': validation_result.overall_grade,
                 'r2_interpretation': self._interpret_r2(performance.r2_score),
-                'nbr_compliance': nbr_result.compliance_score >= 0.7,
-                'reliability_level': self._assess_reliability(performance, nbr_result)
+                'standard_compliance': validation_result.compliance_score >= 0.7,
+                'reliability_level': self._assess_reliability(performance, validation_result)
             },
             'key_findings': [
-                f"Modelo apresenta R² de {performance.r2_score:.4f} ({nbr_result.overall_grade})",
-                f"Aprovado em {len([t for t in nbr_result.individual_tests if t.passed])}/{len(nbr_result.individual_tests)} testes NBR 14653",
+                f"Modelo apresenta R² de {performance.r2_score:.4f} ({validation_result.overall_grade})",
+                f"Aprovado em {len([t for t in validation_result.individual_tests if t.passed])}/{len(validation_result.individual_tests)} testes {validation_result.standard}",
                 f"RMSE de {performance.rmse:.2f} indica precisão {self._assess_precision(performance.mape)}",
                 f"Top 3 variáveis mais importantes: {list(model_result.performance.feature_coefficients.keys())[:3]}"
             ],
-            'recommendations': self._generate_recommendations(performance, nbr_result),
+            'recommendations': self._generate_recommendations(performance, validation_result),
             'limitations': [
                 "Modelo válido apenas para o mercado e período analisados",
                 "Predições devem ser validadas com dados de mercado atuais",
@@ -622,11 +641,11 @@ class ResultsGenerator:
         else:
             return "Capacidade explanatória insuficiente"
     
-    def _assess_reliability(self, performance, nbr_result) -> str:
+    def _assess_reliability(self, performance, validation_result) -> str:
         """Avalia confiabilidade geral do modelo."""
-        if nbr_result.compliance_score >= 0.8 and performance.r2_score >= 0.80:
+        if validation_result.compliance_score >= 0.8 and performance.r2_score >= 0.80:
             return "Alta"
-        elif nbr_result.compliance_score >= 0.7 and performance.r2_score >= 0.70:
+        elif validation_result.compliance_score >= 0.7 and performance.r2_score >= 0.70:
             return "Média"
         else:
             return "Baixa"
@@ -640,7 +659,7 @@ class ResultsGenerator:
         else:
             return "baixa"
     
-    def _generate_recommendations(self, performance, nbr_result) -> List[str]:
+    def _generate_recommendations(self, performance, validation_result) -> List[str]:
         """Gera recomendações baseadas nos resultados."""
         recommendations = []
         
@@ -650,7 +669,7 @@ class ResultsGenerator:
         if performance.mape > 20:
             recommendations.append("Revisar outliers e qualidade dos dados para reduzir MAPE")
         
-        failed_tests = [t for t in nbr_result.individual_tests if not t.passed]
+        failed_tests = [t for t in validation_result.individual_tests if not t.passed]
         if failed_tests:
             recommendations.append(f"Endereçar falhas nos testes: {', '.join([t.test_name for t in failed_tests])}")
         
@@ -660,7 +679,7 @@ class ResultsGenerator:
         return recommendations
     
     def generate_full_report(self, validation_result, transformation_result, 
-                           model_result, nbr_result, cleaned_data: pd.DataFrame) -> EvaluationReport:
+                           model_result, validation_test_result, cleaned_data: pd.DataFrame) -> EvaluationReport:
         """
         Gera relatório completo de avaliação.
         
@@ -668,7 +687,7 @@ class ResultsGenerator:
             validation_result: Resultado da validação de dados
             transformation_result: Resultado das transformações
             model_result: Resultado do modelo
-            nbr_result: Resultado da validação NBR
+            validation_test_result: Resultado da validação conforme norma
             cleaned_data: Dados limpos
             
         Returns:
@@ -682,10 +701,10 @@ class ResultsGenerator:
             data_summary=self.generate_data_summary(validation_result, cleaned_data),
             transformation_summary=self.generate_transformation_summary(transformation_result),
             model_performance=self.generate_model_summary(model_result),
-            nbr_validation=self.generate_nbr_summary(nbr_result),
+            validation_summary=self.generate_validation_summary(validation_test_result),
             predictions=self.generate_predictions(model_result, cleaned_data),
             methodology=self.generate_methodology_description(),
-            conclusions=self.generate_conclusions(model_result, nbr_result)
+            conclusions=self.generate_conclusions(model_result, validation_test_result)
         )
         
         self.logger.info(f"Relatório gerado: {report_id}")
@@ -720,13 +739,14 @@ class ResultsGenerator:
             summary_df = pd.DataFrame([{
                 'Métrica': 'R²',
                 'Valor': report.model_performance['performance_metrics']['r2_score'],
-                'Grau NBR': report.nbr_validation['overall_grade']
+                'Grau': report.validation_summary['overall_grade'],
+                'Norma': report.validation_summary['standard']
             }])
             summary_df.to_excel(writer, sheet_name='Resumo', index=False)
             
-            # Testes NBR
-            nbr_df = pd.DataFrame(report.nbr_validation['individual_tests'])
-            nbr_df.to_excel(writer, sheet_name='Testes NBR', index=False)
+            # Testes de Validação
+            validation_df = pd.DataFrame(report.validation_summary['individual_tests'])
+            validation_df.to_excel(writer, sheet_name='Testes Validação', index=False)
             
             # Coeficientes
             coef_df = pd.DataFrame(list(report.model_performance['feature_coefficients'].items()),

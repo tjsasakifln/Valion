@@ -24,7 +24,10 @@ from contextlib import contextmanager
 from src.core.data_loader import DataLoader
 from src.core.transformations import VariableTransformer
 from src.core.model_builder import ModelBuilder
+from src.core.validation_strategy import ValidatorFactory, ValidationContext
 from src.core.nbr14653_validation import NBR14653Validator
+from src.core.uspap_validation import USPAPValidator
+from src.core.evs_validation import EVSValidator
 from src.core.results_generator import ResultsGenerator
 from src.config.settings import Settings
 from src.websocket.websocket_manager import websocket_manager, ProgressUpdate
@@ -218,17 +221,17 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
         self.update_state(state='PROGRESS', meta={'current': 20, 'total': 100, 'phase': 'Validando dados'})
         send_websocket_update(evaluation_id, 'processing', 'Validando dados', 20.0, 'Validando qualidade dos dados')
         
-        validation_result = data_loader.validate_data(raw_data)
-        if not validation_result.is_valid:
+        data_validation_result = data_loader.validate_data(raw_data)
+        if not data_validation_result.is_valid:
             # Auditoria: Validação falhou
             log_audit_trail(evaluation_id, 'validation_failed', 'data_validation', None,
-                           new_values={'errors': validation_result.errors, 'warnings': validation_result.warnings})
-            send_websocket_update(evaluation_id, 'failed', 'Validação falhou', 20.0, f"Erros: {validation_result.errors}")
-            raise ValueError(f"Dados inválidos: {validation_result.errors}")
+                           new_values={'errors': data_validation_result.errors, 'warnings': data_validation_result.warnings})
+            send_websocket_update(evaluation_id, 'failed', 'Validação falhou', 20.0, f"Erros: {data_validation_result.errors}")
+            raise ValueError(f"Dados inválidos: {data_validation_result.errors}")
         
         # Auditoria: Validação bem-sucedida
         log_audit_trail(evaluation_id, 'validation_passed', 'data_validation', None,
-                       new_values={'summary': validation_result.summary})
+                       new_values={'summary': data_validation_result.summary})
         
         cleaned_data = data_loader.clean_data(raw_data)
         
@@ -303,18 +306,30 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
         
         log_audit_trail(evaluation_id, 'model_trained', 'model_builder', None, new_values=audit_data)
         
-        # Fase 4: Validação NBR
-        self.update_state(state='PROGRESS', meta={'current': 80, 'total': 100, 'phase': 'Validando NBR 14653'})
-        send_websocket_update(evaluation_id, 'processing', 'Validando NBR 14653', 80.0, 'Executando testes estatísticos')
+        # Fase 4: Validação
+        standard = config.get('valuation_standard', 'NBR 14653')
+        self.update_state(state='PROGRESS', meta={'current': 80, 'total': 100, 'phase': f'Validando conforme {standard}'})
+        send_websocket_update(evaluation_id, 'processing', f'Validando conforme {standard}', 80.0, 'Executando testes estatísticos')
         
-        validator = NBR14653Validator(config)
+        # Prepare data for validation
         X_train, X_test, y_train, y_test = model_builder.prepare_data(transformation_result.transformed_data)
-        nbr_result = validator.validate_model(model_result.model, X_train, X_test, y_train, y_test)
         
-        # Auditoria: Validação NBR
-        log_audit_trail(evaluation_id, 'nbr_validation_completed', 'nbr_validator', None,
-                       new_values={'grade': nbr_result.grade, 'compliance_score': nbr_result.compliance_score,
-                                  'tests_passed': nbr_result.tests_passed})
+        # Select validator based on configuration
+        validator_map = {
+            "NBR 14653": NBR14653Validator,
+            "USPAP": USPAPValidator,
+            "EVS": EVSValidator
+        }
+        
+        validator_class = validator_map.get(standard, NBR14653Validator)
+        validator = validator_class(model_result.model, X_train, X_test, y_train, y_test)
+        validation_result = validator.validate()
+        
+        # Auditoria: Validação
+        log_audit_trail(evaluation_id, 'validation_completed', 'validator', None,
+                       new_values={'standard': validation_result.standard, 'grade': validation_result.overall_grade, 
+                                  'compliance_score': validation_result.compliance_score,
+                                  'tests_passed': validation_result.summary.get('passed_tests', 0)})
         
         # Fase 5: Geração de relatório
         self.update_state(state='PROGRESS', meta={'current': 90, 'total': 100, 'phase': 'Gerando relatório'})
@@ -322,7 +337,7 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
         
         results_generator = ResultsGenerator(config)
         report = results_generator.generate_full_report(
-            validation_result, transformation_result, model_result, nbr_result, cleaned_data
+            data_validation_result, transformation_result, model_result, validation_result, cleaned_data
         )
         
         # Salvar modelo e relatório com verificação de integridade
@@ -405,7 +420,9 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
         # Auditoria: Avaliação finalizada
         log_audit_trail(evaluation_id, 'evaluation_completed', 'evaluation', evaluation_id,
                        new_values={'final_r2_score': model_result.performance.r2_score,
-                                  'nbr_grade': nbr_result.grade, 'compliance_score': nbr_result.compliance_score})
+                                  'validation_standard': validation_result.standard,
+                                  'grade': validation_result.overall_grade, 
+                                  'compliance_score': validation_result.compliance_score})
         
         return {
             'evaluation_id': evaluation_id,
@@ -414,7 +431,7 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
             'model_path': model_path,
             'report_path': report_path,
             'performance': model_result.performance.__dict__,
-            'nbr_validation': nbr_result.__dict__,
+            'validation_result': validation_result.__dict__,
             'timestamp': datetime.now().isoformat()
         }
         
@@ -498,14 +515,24 @@ def train_model(self, data_dict: Dict[str, Any], target_column: str = "valor", c
         
         self.update_state(state='PROGRESS', meta={'current': 75, 'total': 100, 'phase': 'Validando modelo'})
         
-        # Validar NBR
-        validator = NBR14653Validator(config)
+        # Validar usando seletor de validador
+        standard = config.get('valuation_standard', 'NBR 14653')
         X_train, X_test, y_train, y_test = model_builder.prepare_data(transformation_result.transformed_data)
-        nbr_result = validator.validate_model(model_result.model, X_train, X_test, y_train, y_test)
+        
+        # Select validator based on configuration
+        validator_map = {
+            "NBR 14653": NBR14653Validator,
+            "USPAP": USPAPValidator,
+            "EVS": EVSValidator
+        }
+        
+        validator_class = validator_map.get(standard, NBR14653Validator)
+        validator = validator_class(model_result.model, X_train, X_test, y_train, y_test)
+        validation_result = validator.validate()
         
         return {
             'model_performance': model_result.performance.__dict__,
-            'nbr_validation': nbr_result.__dict__,
+            'validation_result': validation_result.__dict__,
             'best_params': model_result.best_params,
             'training_summary': model_result.training_summary,
             'timestamp': datetime.now().isoformat()
