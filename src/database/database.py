@@ -805,7 +805,9 @@ def get_database_manager() -> DatabaseManager:
     global _database_manager
     
     if _database_manager is None:
-        database_url = os.getenv('DATABASE_URL', 'sqlite:///valion.db')
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            raise ValueError("A variável de ambiente DATABASE_URL não está configurada.")
         _database_manager = DatabaseManager(database_url)
     
     return _database_manager
@@ -816,7 +818,9 @@ def initialize_database(database_url: str = None):
     global _database_manager
     
     if database_url is None:
-        database_url = os.getenv('DATABASE_URL', 'sqlite:///valion.db')
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            raise ValueError("A variável de ambiente DATABASE_URL não está configurada.")
     
     _database_manager = DatabaseManager(database_url)
     return _database_manager

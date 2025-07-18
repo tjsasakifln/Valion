@@ -65,9 +65,7 @@ USER valion
 # Expor portas
 EXPOSE 8000 8501
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Healthcheck removed - will be configured per service in docker-compose.yml
 
 # Script de entrada flexível baseado no serviço
 COPY docker-entrypoint.sh /usr/local/bin/

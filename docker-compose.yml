@@ -64,6 +64,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
     restart: unless-stopped
 
   # Worker Celery
@@ -99,14 +104,14 @@ services:
       - "5555:5555"
     environment:
       <<: *common-env
-      SERVICE_TYPE: scheduler
     depends_on:
       redis:
         condition: service_healthy
       worker:
         condition: service_started
     restart: unless-stopped
-    command: ["celery", "-A", "src.workers.tasks", "flower", "--port=5555"]
+    # Override entrypoint to run flower directly instead of using docker-entrypoint.sh
+    entrypoint: ["celery", "-A", "src.workers.tasks", "flower", "--port=5555"]
 
   # Frontend Streamlit
   frontend:

@@ -32,11 +32,6 @@ case "${SERVICE_TYPE:-api}" in
         echo "Iniciando Frontend Streamlit..."
         exec streamlit run frontend.py --server.port=8501 --server.address=0.0.0.0
         ;;
-    "microservice")
-        wait_for_service redis 6379 "Redis"
-        echo "Iniciando Microserviço..."
-        exec uvicorn src.microservices.main:app --host 0.0.0.0 --port 8000
-        ;;
     "scheduler")
         wait_for_service postgres 5432 "PostgreSQL"
         wait_for_service redis 6379 "Redis"
@@ -45,7 +40,7 @@ case "${SERVICE_TYPE:-api}" in
         ;;
     *)
         echo "Tipo de serviço não reconhecido: ${SERVICE_TYPE}"
-        echo "Tipos válidos: api, worker, frontend, microservice, scheduler"
+        echo "Tipos válidos: api, worker, frontend, scheduler"
         exit 1
         ;;
 esac
