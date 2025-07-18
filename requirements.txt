@@ -74,3 +74,10 @@ statsmodels>=0.14.0
 # Utilities
 python-dateutil>=2.8.0
 pytz>=2023.3
+
+# Geospatial analysis
+geopandas>=0.14.0
+shapely>=2.0.0
+folium>=0.15.0
+geopy>=2.3.0
+rtree>=1.0.0

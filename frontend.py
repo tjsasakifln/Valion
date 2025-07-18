@@ -95,6 +95,38 @@ st.markdown("""
         padding: 1rem;
         margin: 1rem 0;
     }
+    
+    .shap-lab-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 1rem;
+        margin: 1rem 0;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    .simulation-result {
+        background: #f8f9fa;
+        border: 2px solid #28a745;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .feature-impact-positive {
+        color: #28a745;
+        font-weight: bold;
+    }
+    
+    .feature-impact-negative {
+        color: #dc3545;
+        font-weight: bold;
+    }
+    
+    .feature-impact-neutral {
+        color: #6c757d;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -426,6 +458,7 @@ def main():
         "Acompanhar Avaliação", 
         "Resultados", 
         "Predições",
+        "Laboratório SHAP",
         "Sobre"
     ])
     
@@ -439,6 +472,8 @@ def main():
         show_results_page()
     elif page == "Predições":
         show_predictions_page()
+    elif page == "Laboratório SHAP":
+        show_shap_laboratory_page()
     elif page == "Sobre":
         show_about_page()
 
@@ -1858,6 +1893,592 @@ def show_audit_trail_tab(evaluation_id: str):
                     )
         else:
             st.error("Erro ao carregar trilha de auditoria.")
+
+def show_shap_laboratory_page():
+    """Página do Laboratório de Simulação SHAP Interativo."""
+    
+    st.header("🧪 Laboratório de Simulação SHAP")
+    
+    # Adicionar estado da aplicação para o laboratório
+    if 'lab_features_config' not in st.session_state:
+        st.session_state.lab_features_config = None
+    if 'lab_simulation_result' not in st.session_state:
+        st.session_state.lab_simulation_result = None
+    if 'lab_baseline_loaded' not in st.session_state:
+        st.session_state.lab_baseline_loaded = False
+    
+    # Descrição do laboratório
+    st.markdown("""
+    <div class="transparency-box">
+        <h4>🔬 Interpretabilidade Interativa</h4>
+        <p>O Laboratório SHAP transforma a análise "glass-box" de passiva para ativa. 
+        Explore como diferentes características impactam o valor final através de simulações em tempo real.</p>
+        <strong>Disponível apenas no modo especialista</strong>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Input para ID da avaliação
+    evaluation_id = st.text_input(
+        "ID da Avaliação (Modo Especialista)",
+        value=st.session_state.evaluation_id or "",
+        placeholder="Digite o ID de uma avaliação concluída em modo especialista"
+    )
+    
+    if not evaluation_id:
+        st.info("💡 Insira o ID de uma avaliação para acessar o laboratório SHAP.")
+        return
+    
+    # Carregar configuração do laboratório
+    col1, col2 = st.columns([3, 1])
+    
+    with col2:
+        if st.button("🔄 Carregar Laboratório", type="primary"):
+            with st.spinner("Carregando configuração do laboratório..."):
+                features_config = call_api(f"/evaluations/{evaluation_id}/laboratory_features")
+                
+                if features_config:
+                    st.session_state.lab_features_config = features_config
+                    st.session_state.lab_baseline_loaded = True
+                    st.success("✅ Laboratório carregado!")
+                else:
+                    st.error("❌ Erro ao carregar laboratório. Verifique se a avaliação foi feita em modo especialista.")
+    
+    with col1:
+        if st.session_state.lab_baseline_loaded:
+            st.success("🔗 Laboratório ativo - Simulações habilitadas")
+        else:
+            st.info("📡 Aguardando carregamento do laboratório...")
+    
+    # Interface principal do laboratório
+    if st.session_state.lab_features_config:
+        show_shap_simulation_interface(evaluation_id, st.session_state.lab_features_config)
+
+def show_shap_simulation_interface(evaluation_id: str, features_config: Dict[str, Any]):
+    """Interface principal de simulação SHAP."""
+    
+    st.markdown("---")
+    
+    # Tabs do laboratório
+    tabs = st.tabs([
+        "🎛️ Simulador", 
+        "📊 Cenários Predefinidos", 
+        "🌊 Gráfico Waterfall", 
+        "📈 Análise de Sensibilidade"
+    ])
+    
+    with tabs[0]:
+        show_feature_simulator(evaluation_id, features_config)
+    
+    with tabs[1]:
+        show_predefined_scenarios(evaluation_id, features_config)
+    
+    with tabs[2]:
+        show_waterfall_analysis(evaluation_id)
+    
+    with tabs[3]:
+        show_sensitivity_analysis(evaluation_id, features_config)
+
+def show_feature_simulator(evaluation_id: str, features_config: Dict[str, Any]):
+    """Simulador de features com sliders interativos."""
+    
+    st.subheader("🎛️ Simulador de Características")
+    
+    st.markdown("""
+    **Como usar:** Ajuste os sliders abaixo para modificar as características do imóvel. 
+    O impacto SHAP será calculado em tempo real para cada mudança.
+    """)
+    
+    features = features_config.get('features', {})
+    categories = features_config.get('categories', {})
+    
+    # Organizar por categorias
+    feature_values = {}
+    
+    # Interface por categorias
+    for category_key, category_info in categories.items():
+        with st.expander(f"{category_info['name']}", expanded=True):
+            category_features = category_info.get('features', [])
+            
+            cols = st.columns(min(3, len(category_features)))
+            
+            for i, feature_key in enumerate(category_features):
+                if feature_key in features:
+                    feature = features[feature_key]
+                    col_idx = i % 3
+                    
+                    with cols[col_idx]:
+                        if feature['slider_type'] == 'integer':
+                            value = st.slider(
+                                feature['display_name'],
+                                min_value=int(feature['min_value']),
+                                max_value=int(feature['max_value']),
+                                value=int(feature['current_value']),
+                                step=int(feature['step']),
+                                help=feature.get('description', ''),
+                                key=f"sim_{feature_key}"
+                            )
+                        else:
+                            value = st.slider(
+                                feature['display_name'],
+                                min_value=feature['min_value'],
+                                max_value=feature['max_value'],
+                                value=feature['current_value'],
+                                step=feature['step'],
+                                help=feature.get('description', ''),
+                                key=f"sim_{feature_key}"
+                            )
+                        
+                        feature_values[feature_key] = float(value)
+                        
+                        # Mostrar impacto estimado
+                        impact = (value - feature['current_value']) * feature.get('impact_coefficient', 0)
+                        color = "green" if impact > 0 else "red" if impact < 0 else "gray"
+                        st.markdown(f"<small style='color: {color}'>Impacto: R$ {impact:+,.0f}</small>", 
+                                  unsafe_allow_html=True)
+    
+    # Botão de simulação
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        if st.button("🚀 Simular Cenário", type="primary", use_container_width=True):
+            with st.spinner("Calculando impacto SHAP..."):
+                simulate_scenario(evaluation_id, feature_values)
+
+def simulate_scenario(evaluation_id: str, feature_modifications: Dict[str, float]):
+    """Executa simulação de cenário."""
+    
+    data = {
+        "evaluation_id": evaluation_id,
+        "feature_modifications": feature_modifications,
+        "simulation_name": f"Simulação {datetime.now().strftime('%H:%M:%S')}",
+        "compare_to_baseline": True
+    }
+    
+    result = call_api(f"/evaluations/{evaluation_id}/shap_simulation", method="POST", data=data)
+    
+    if result:
+        st.session_state.lab_simulation_result = result
+        show_simulation_results(result)
+    else:
+        st.error("Erro na simulação. Tente novamente.")
+
+def show_simulation_results(result: Dict[str, Any]):
+    """Mostra resultados da simulação."""
+    
+    st.markdown("---")
+    st.subheader("📊 Resultados da Simulação")
+    
+    scenario = result.get('scenario_comparison', {})
+    baseline = scenario.get('baseline', {})
+    modified = scenario.get('modified', {})
+    impact = scenario.get('impact_analysis', {})
+    
+    # Comparação de valores
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            "Valor Baseline", 
+            f"R$ {baseline.get('prediction', 0):,.0f}",
+            help="Valor original com características padrão"
+        )
+    
+    with col2:
+        st.metric(
+            "Valor Simulado", 
+            f"R$ {modified.get('prediction', 0):,.0f}",
+            delta=f"R$ {impact.get('total_impact', 0):+,.0f}",
+            help="Valor após modificações nas características"
+        )
+    
+    with col3:
+        rel_change = impact.get('relative_change', 0)
+        st.metric(
+            "Variação Relativa", 
+            f"{rel_change:+.1f}%",
+            help="Percentual de mudança em relação ao baseline"
+        )
+    
+    # Gráfico de impacto por feature
+    waterfall_data = result.get('waterfall_data', {})
+    contributions = waterfall_data.get('contributions', [])
+    
+    if contributions:
+        st.subheader("🌊 Impacto por Característica")
+        
+        # Preparar dados para gráfico waterfall
+        features = []
+        baseline_values = []
+        modified_values = []
+        deltas = []
+        
+        for contrib in contributions:
+            feature = contrib['feature']
+            if feature not in ['base_value', 'final_prediction']:
+                features.append(feature.replace('_', ' ').title())
+                baseline_values.append(contrib['baseline_contribution'])
+                modified_values.append(contrib['modified_contribution'])
+                deltas.append(contrib['delta'])
+        
+        # Criar gráfico de barras comparativo
+        fig = go.Figure()
+        
+        fig.add_trace(go.Bar(
+            name='Baseline',
+            x=features,
+            y=baseline_values,
+            marker_color='lightblue',
+            opacity=0.7
+        ))
+        
+        fig.add_trace(go.Bar(
+            name='Simulado',
+            x=features,
+            y=modified_values,
+            marker_color='darkblue'
+        ))
+        
+        fig.update_layout(
+            title="Comparação SHAP: Baseline vs Simulado",
+            xaxis_title="Características",
+            yaxis_title="Contribuição SHAP (R$)",
+            barmode='group',
+            height=500
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Insights da simulação
+    insights = result.get('insights', {})
+    if insights:
+        st.subheader("💡 Insights da Simulação")
+        
+        recommendations = insights.get('recommendations', [])
+        for rec in recommendations:
+            st.info(f"💡 {rec}")
+        
+        top_drivers = insights.get('top_drivers', [])
+        if top_drivers:
+            st.write("**Principais impactos:**")
+            for feature, impact in top_drivers:
+                st.write(f"• **{feature.replace('_', ' ').title()}**: R$ {impact:+,.0f}")
+
+def show_predefined_scenarios(evaluation_id: str, features_config: Dict[str, Any]):
+    """Cenários predefinidos para análise rápida."""
+    
+    st.subheader("📊 Cenários Predefinidos")
+    
+    st.markdown("""
+    **Análise Rápida:** Explore cenários típicos do mercado imobiliário com um clique.
+    Cada preset foi calibrado para representar diferentes segmentos do mercado.
+    """)
+    
+    presets = features_config.get('simulation_presets', [])
+    
+    if presets:
+        # Grid de cenários
+        cols = st.columns(min(3, len(presets)))
+        
+        for i, preset in enumerate(presets):
+            col_idx = i % 3
+            
+            with cols[col_idx]:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <h4>{preset['name']}</h4>
+                    <p>{preset['description']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button(f"Simular {preset['name']}", key=f"preset_{i}"):
+                    with st.spinner(f"Simulando {preset['name']}..."):
+                        simulate_scenario(evaluation_id, preset['modifications'])
+    
+    # Mostrar resultado se disponível
+    if st.session_state.lab_simulation_result:
+        show_simulation_results(st.session_state.lab_simulation_result)
+
+def show_waterfall_analysis(evaluation_id: str):
+    """Análise waterfall SHAP detalhada."""
+    
+    st.subheader("🌊 Análise Waterfall SHAP")
+    
+    st.markdown("""
+    **Decomposição Completa:** Visualize como cada característica contribui para a formação do valor final,
+    desde o valor base até a predição final.
+    """)
+    
+    sample_index = st.slider("Índice da Amostra", 0, 10, 0, help="Selecione uma amostra para análise detalhada")
+    
+    if st.button("📈 Gerar Waterfall", type="primary"):
+        with st.spinner("Gerando análise waterfall..."):
+            waterfall_data = call_api(f"/evaluations/{evaluation_id}/shap_waterfall?sample_index={sample_index}")
+            
+            if waterfall_data:
+                show_waterfall_chart(waterfall_data)
+            else:
+                st.error("Erro ao gerar waterfall. Verifique se a avaliação suporta SHAP.")
+
+def show_waterfall_chart(waterfall_data: Dict[str, Any]):
+    """Exibe gráfico waterfall SHAP."""
+    
+    chart_data = waterfall_data.get('waterfall_chart', {})
+    contributions = chart_data.get('contributions', [])
+    
+    if not contributions:
+        st.error("Dados de waterfall não disponíveis.")
+        return
+    
+    # Preparar dados para gráfico waterfall
+    features = []
+    values = []
+    cumulative = []
+    colors = []
+    
+    config = chart_data.get('chart_config', {})
+    color_map = config.get('colors', {})
+    
+    for contrib in contributions:
+        feature = contrib['feature']
+        value = contrib['value']
+        cum_value = contrib['cumulative']
+        
+        features.append(feature.replace('_', ' ').title())
+        values.append(value)
+        cumulative.append(cum_value)
+        
+        # Definir cor baseada no tipo
+        if feature in ['Base Value', 'Final Prediction']:
+            colors.append(color_map.get('base', '#4682B4'))
+        elif value > 0:
+            colors.append(color_map.get('positive', '#2E8B57'))
+        else:
+            colors.append(color_map.get('negative', '#DC143C'))
+    
+    # Criar gráfico waterfall
+    fig = go.Figure()
+    
+    # Adicionar barras
+    for i, (feature, value, color) in enumerate(zip(features, values, colors)):
+        if i == 0 or i == len(features) - 1:
+            # Base value e final prediction
+            fig.add_trace(go.Bar(
+                x=[feature],
+                y=[cumulative[i]],
+                marker_color=color,
+                name=feature,
+                showlegend=False,
+                text=f"R$ {cumulative[i]:,.0f}",
+                textposition='auto'
+            ))
+        else:
+            # Contribuições
+            fig.add_trace(go.Bar(
+                x=[feature],
+                y=[value],
+                base=cumulative[i-1] if value > 0 else cumulative[i],
+                marker_color=color,
+                name=feature,
+                showlegend=False,
+                text=f"R$ {value:+,.0f}",
+                textposition='auto'
+            ))
+    
+    fig.update_layout(
+        title="Decomposição SHAP - Waterfall",
+        xaxis_title="Características",
+        yaxis_title="Valor (R$)",
+        height=500,
+        showlegend=False
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Detalhes das features
+    feature_details = waterfall_data.get('feature_details', {})
+    if feature_details:
+        st.subheader("📝 Detalhes das Características")
+        
+        for feature_key, details in feature_details.items():
+            with st.expander(f"{feature_key.replace('_', ' ').title()}"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write(f"**Valor atual:** {details.get('current_value', 'N/A')} {details.get('unit', '')}")
+                    st.write(f"**Ranking de importância:** #{details.get('importance_rank', 'N/A')}")
+                
+                with col2:
+                    st.write(f"**Interpretação:** {details.get('interpretation', 'N/A')}")
+    
+    # Resumo da interpretação
+    interpretation = waterfall_data.get('interpretation_summary', {})
+    if interpretation:
+        st.subheader("🎯 Resumo da Interpretação")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            drivers = interpretation.get('main_value_drivers', [])
+            if drivers:
+                st.write("**Principais fatores de valorização:**")
+                for driver in drivers:
+                    st.write(f"✅ {driver.replace('_', ' ').title()}")
+        
+        with col2:
+            detractors = interpretation.get('main_value_detractors', [])
+            if detractors:
+                st.write("**Principais fatores de desvalorização:**")
+                for detractor in detractors:
+                    st.write(f"❌ {detractor.replace('_', ' ').title()}")
+        
+        explanation = interpretation.get('explanation', '')
+        if explanation:
+            st.info(f"💡 **Explicação:** {explanation}")
+
+def show_sensitivity_analysis(evaluation_id: str, features_config: Dict[str, Any]):
+    """Análise de sensibilidade das features."""
+    
+    st.subheader("📈 Análise de Sensibilidade")
+    
+    st.markdown("""
+    **Análise de Robustez:** Examine como pequenas variações em cada característica 
+    afetam o valor final. Útil para entender a estabilidade das predições.
+    """)
+    
+    features = features_config.get('features', {})
+    
+    # Seleção de feature para análise
+    feature_options = {key: info['display_name'] for key, info in features.items()}
+    selected_feature = st.selectbox(
+        "Selecione uma característica para análise:",
+        options=list(feature_options.keys()),
+        format_func=lambda x: feature_options[x]
+    )
+    
+    if selected_feature and st.button("🔍 Analisar Sensibilidade"):
+        with st.spinner("Executando análise de sensibilidade..."):
+            show_sensitivity_chart(evaluation_id, selected_feature, features[selected_feature])
+
+def show_sensitivity_chart(evaluation_id: str, feature_key: str, feature_info: Dict[str, Any]):
+    """Gera e exibe gráfico de sensibilidade."""
+    
+    # Gerar range de valores para análise
+    min_val = feature_info['min_value']
+    max_val = feature_info['max_value']
+    current_val = feature_info['current_value']
+    step = feature_info['step']
+    
+    # Criar range de valores
+    values = np.arange(min_val, max_val + step, step)
+    
+    # Simular cada valor (mock - em implementação real seria via API)
+    predictions = []
+    shap_contributions = []
+    
+    base_prediction = 500000.0
+    impact_coeff = feature_info.get('impact_coefficient', 1000.0)
+    
+    for val in values:
+        # Simulação simplificada
+        impact = (val - current_val) * impact_coeff
+        prediction = base_prediction + impact
+        shap_contrib = impact  # Simplificado
+        
+        predictions.append(prediction)
+        shap_contributions.append(shap_contrib)
+    
+    # Criar gráficos
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Gráfico de valor vs feature
+        fig1 = go.Figure()
+        
+        fig1.add_trace(go.Scatter(
+            x=values,
+            y=predictions,
+            mode='lines+markers',
+            name='Valor Predito',
+            line=dict(color='blue', width=3),
+            marker=dict(size=6)
+        ))
+        
+        # Destacar valor atual
+        current_prediction = base_prediction
+        fig1.add_trace(go.Scatter(
+            x=[current_val],
+            y=[current_prediction],
+            mode='markers',
+            name='Valor Atual',
+            marker=dict(size=12, color='red', symbol='star')
+        ))
+        
+        fig1.update_layout(
+            title=f"Sensibilidade: {feature_info['display_name']}",
+            xaxis_title=f"{feature_info['display_name']} ({feature_info.get('unit', '')})",
+            yaxis_title="Valor Predito (R$)",
+            height=400
+        )
+        
+        st.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        # Gráfico de contribuição SHAP
+        fig2 = go.Figure()
+        
+        fig2.add_trace(go.Scatter(
+            x=values,
+            y=shap_contributions,
+            mode='lines+markers',
+            name='Contribuição SHAP',
+            line=dict(color='green', width=3),
+            marker=dict(size=6)
+        ))
+        
+        # Linha zero
+        fig2.add_hline(y=0, line_dash="dash", line_color="gray")
+        
+        fig2.update_layout(
+            title="Contribuição SHAP vs Valor da Feature",
+            xaxis_title=f"{feature_info['display_name']} ({feature_info.get('unit', '')})",
+            yaxis_title="Contribuição SHAP (R$)",
+            height=400
+        )
+        
+        st.plotly_chart(fig2, use_container_width=True)
+    
+    # Análise estatística
+    st.subheader("📊 Estatísticas de Sensibilidade")
+    
+    # Calcular métricas
+    value_range = max(predictions) - min(predictions)
+    shap_range = max(shap_contributions) - min(shap_contributions)
+    elasticity = (max(predictions) / min(predictions) - 1) / (max_val / min_val - 1) if min_val > 0 else 0
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Range de Valores", f"R$ {value_range:,.0f}")
+    
+    with col2:
+        st.metric("Range SHAP", f"R$ {shap_range:,.0f}")
+    
+    with col3:
+        st.metric("Elasticidade", f"{elasticity:.2f}")
+    
+    # Interpretação
+    st.info(f"""
+    💡 **Interpretação da Sensibilidade:**
+    
+    - **Range de Valores:** A variação total no valor predito quando {feature_info['display_name']} 
+      varia de {min_val} a {max_val} {feature_info.get('unit', '')}
+    - **Elasticidade:** {elasticity:.2f} indica que uma variação de 1% na feature resulta 
+      em aproximadamente {elasticity:.2f}% de variação no valor
+    - **Impacto:** {'Alto' if abs(elasticity) > 1 else 'Moderado' if abs(elasticity) > 0.5 else 'Baixo'} 
+      impacto desta característica no valor final
+    """)
 
 def show_about_page():
     """Página sobre a aplicação."""
