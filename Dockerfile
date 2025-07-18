@@ -18,19 +18,26 @@ RUN apt-get update && apt-get install -y \
 # Criar diretório de trabalho
 WORKDIR /app
 
-# Copiar apenas requirements.txt primeiro para aproveitar cache do Docker
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copiar apenas requirements primeiro para aproveitar cache do Docker
+COPY requirements/ requirements/
 
-# Estágio final
+# Build stage com ARG para tipo de serviço
+ARG SERVICE_TYPE=api
+RUN pip install --no-cache-dir -r requirements/${SERVICE_TYPE}.txt
+
+# Estágio final - runtime
 FROM python:3.11-slim
+
+# Re-declarar ARG para uso no estágio final
+ARG SERVICE_TYPE=api
 
 # Configurar variáveis de ambiente
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app
+ENV SERVICE_TYPE=${SERVICE_TYPE}
 
-# Instalar dependências runtime
+# Instalar dependências runtime mínimas
 RUN apt-get update && apt-get install -y \
     libpq5 \
     curl \
@@ -44,11 +51,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Criar diretório de trabalho
 WORKDIR /app
 
-# Copiar apenas arquivos necessários para a aplicação (não usar COPY . . por segurança e eficiência)
+# Copiar apenas arquivos necessários para a aplicação
 COPY src/ /app/src/
 COPY frontend.py /app/frontend.py
 
-# Criar diretórios necessários
+# Criar diretórios necessários com permissões corretas
 RUN mkdir -p uploads models reports temp logs && \
     chown -R valion:valion /app
 
@@ -62,5 +69,10 @@ EXPOSE 8000 8501
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Comando padrão (API)
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Script de entrada flexível baseado no serviço
+COPY docker-entrypoint.sh /usr/local/bin/
+USER root
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+USER valion
+
+ENTRYPOINT ["docker-entrypoint.sh"]

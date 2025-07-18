@@ -6,6 +6,7 @@ WebSocket manager for real-time Celery feedback
 import asyncio
 import json
 import logging
+import os
 from typing import Dict, Set, Optional, Any, List
 from fastapi import WebSocket, WebSocketDisconnect
 from datetime import datetime, timedelta
@@ -55,7 +56,12 @@ class WebSocketManager:
         
         # Conectar ao Redis para persistence do buffer
         try:
-            self.redis_client = redis.Redis(host='localhost', port=6379, db=1, decode_responses=True)
+            self.redis_client = redis.Redis(
+                host=os.getenv('REDIS_HOST', 'redis'),  # Docker service name
+                port=int(os.getenv('REDIS_PORT', '6379')), 
+                db=1, 
+                decode_responses=True
+            )
             self.redis_available = True
         except Exception as e:
             self.logger.warning(f"Redis não disponível para buffer WebSocket: {e}")

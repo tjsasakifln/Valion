@@ -1,0 +1,16 @@
+# Dependências específicas para Microserviços
+-r base.txt
+
+# Async HTTP client/server
+aiohttp==3.9.1
+aioredis==2.0.1
+
+# Fast API for microservices
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Service discovery and communication
+requests==2.31.0
+
+# Monitoring
+prometheus-client==0.19.0

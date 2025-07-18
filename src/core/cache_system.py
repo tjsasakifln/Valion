@@ -159,7 +159,7 @@ class MemoryCache(CacheBackend):
 class RedisCache(CacheBackend):
     """Cache usando Redis."""
     
-    def __init__(self, host: str = 'localhost', port: int = 6379, 
+    def __init__(self, host: str = 'redis', port: int = 6379,  # Docker service name 
                  db: int = 0, prefix: str = 'valion:cache'):
         self.prefix = prefix
         try:
@@ -505,7 +505,7 @@ class CacheManager:
         cache_backend = config.get('cache_backend', 'memory')
         if cache_backend == 'redis':
             self.backend = RedisCache(
-                host=config.get('redis_host', 'localhost'),
+                host=config.get('redis_host', 'redis'),  # Docker service name
                 port=config.get('redis_port', 6379),
                 db=config.get('redis_db', 0)
             )
@@ -597,7 +597,7 @@ def get_default_cache_config() -> Dict[str, Any]:
         'geospatial_ttl': 3600,
         'model_cache_dir': 'model_cache',
         'max_cached_models': 50,
-        'redis_host': 'localhost',
+        'redis_host': 'redis',  # Docker service name
         'redis_port': 6379,
         'redis_db': 0
     }

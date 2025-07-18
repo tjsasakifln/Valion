@@ -30,8 +30,8 @@ st.set_page_config(
 )
 
 # API settings
-API_BASE_URL = "http://localhost:8000"
-WS_BASE_URL = "ws://localhost:8000"
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+WS_BASE_URL = os.getenv("WS_BASE_URL", "ws://localhost:8000")
 
 # Custom CSS styles
 st.markdown("""
@@ -2550,7 +2550,7 @@ def show_about_page():
     with st.expander("Informações Técnicas"):
         st.code("""
         # Configuração da API
-        API_BASE_URL = "http://localhost:8000"
+        API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
         
         # Dependências principais
         - streamlit >= 1.28.0

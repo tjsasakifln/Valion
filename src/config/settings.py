@@ -22,7 +22,7 @@ except ImportError:
 @dataclass
 class DatabaseSettings:
     """Configurações de banco de dados."""
-    host: str = "localhost"
+    host: str = "postgres"  # Docker service name
     port: int = 5432
     name: str = "valion"
     user: str = "valion_user"
@@ -37,7 +37,7 @@ class DatabaseSettings:
 @dataclass
 class RedisSettings:
     """Configurações do Redis."""
-    host: str = "localhost"
+    host: str = "redis"  # Docker service name
     port: int = 6379
     db: int = 0
     password: Optional[str] = None
@@ -52,8 +52,8 @@ class RedisSettings:
 @dataclass
 class CelerySettings:
     """Configurações do Celery."""
-    broker_url: str = "redis://localhost:6379/0"
-    result_backend: str = "redis://localhost:6379/0"
+    broker_url: str = "redis://redis:6379/0"  # Docker service name
+    result_backend: str = "redis://redis:6379/0"  # Docker service name
     task_serializer: str = "json"
     accept_content: List[str] = field(default_factory=lambda: ["json"])
     result_serializer: str = "json"
@@ -159,7 +159,7 @@ class CacheSettings:
     model_cache_dir: str = "model_cache"
     max_cached_models: int = 50
     model_cache_min_r2: float = 0.6
-    redis_host: str = "localhost"
+    redis_host: str = "redis"  # Docker service name
     redis_port: int = 6379
     redis_db: int = 1  # Usar DB separado para cache
 
@@ -287,7 +287,7 @@ class Settings:
         # Database
         db_password = self.security.get_database_password() if use_secrets_manager else os.getenv("DB_PASSWORD", "")
         self.database = DatabaseSettings(
-            host=os.getenv("DB_HOST", "localhost"),
+            host=os.getenv("DB_HOST", "postgres"),  # Docker service name
             port=int(os.getenv("DB_PORT", "5432")),
             name=os.getenv("DB_NAME", "valion"),
             user=os.getenv("DB_USER", "valion_user"),
@@ -297,7 +297,7 @@ class Settings:
         
         # Redis
         self.redis = RedisSettings(
-            host=os.getenv("REDIS_HOST", "localhost"),
+            host=os.getenv("REDIS_HOST", "redis"),  # Docker service name
             port=int(os.getenv("REDIS_PORT", "6379")),
             db=int(os.getenv("REDIS_DB", "0")),
             password=os.getenv("REDIS_PASSWORD"),
@@ -363,7 +363,7 @@ class Settings:
             model_cache_dir=os.getenv("MODEL_CACHE_DIR", "model_cache"),
             max_cached_models=int(os.getenv("MAX_CACHED_MODELS", "50")),
             model_cache_min_r2=float(os.getenv("MODEL_CACHE_MIN_R2", "0.6")),
-            redis_host=os.getenv("CACHE_REDIS_HOST", "localhost"),
+            redis_host=os.getenv("CACHE_REDIS_HOST", "redis"),  # Docker service name
             redis_port=int(os.getenv("CACHE_REDIS_PORT", "6379")),
             redis_db=int(os.getenv("CACHE_REDIS_DB", "1"))
         )
