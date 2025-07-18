@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Phase 1: Data Ingestion and Validation
 Responsible for loading, validating and preparing real estate data for analysis.

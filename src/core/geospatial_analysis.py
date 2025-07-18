@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Motor de Análise Geoespacial para Valion
 Responsável por processar dados geográficos e criar features de localização.

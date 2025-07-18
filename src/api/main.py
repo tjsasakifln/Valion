@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 FastAPI API for Valion - Real Estate Evaluation Platform
 Responsible for serving the API and managing WebSocket connections.

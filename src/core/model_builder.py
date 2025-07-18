@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Phase 3: Elastic Net Model Construction and Training
 Responsible for training the regression model with regularization.

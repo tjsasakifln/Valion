@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Fase 2: Preparação e Transformação de Variáveis
 Responsável por transformar e preparar variáveis para modelagem.

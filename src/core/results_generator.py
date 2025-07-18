@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Fase 5: Gerador de Resultados
 Consolida todas as informações em um relatório final defensável.

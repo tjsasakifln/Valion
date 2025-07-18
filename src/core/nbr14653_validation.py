@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Phase 4: NBR 14653 Validation
 Implements complete battery of tests required by the Brazilian technical standard.

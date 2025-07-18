@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Configurações centralizadas para a plataforma Valion
 Gerencia todas as configurações do sistema de forma unificada.

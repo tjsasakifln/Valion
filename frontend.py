@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Streamlit Frontend for Valion - "Thin Client" Application
 User interface responsible for rendering the UI and orchestrating API calls.

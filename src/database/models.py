@@ -1,3 +1,4 @@
+# For commercial or production use, you must obtain express written consent from Tiago Sasaki via tiago@confenge.com.br.
 """
 Modelos de banco de dados para Valion - Sistema de persistência e auditoria
 """
