@@ -1,5 +1,5 @@
 """
-Gerenciador de banco de dados para Valion
+Database manager for Valion
 """
 
 from sqlalchemy import create_engine, event, text
@@ -20,21 +20,21 @@ from .models import Base, User, Project, Evaluation, EvaluationResult, AuditTrai
 
 
 class DatabaseManager:
-    """Gerenciador centralizado do banco de dados com auditoria automática."""
+    """Centralized database manager with automatic auditing."""
     
     def __init__(self, database_url: str):
         """
-        Inicializa o gerenciador de banco de dados com proteções de integridade.
+        Initializes database manager with integrity protections.
         
         Args:
-            database_url: URL de conexão com o banco
+            database_url: Database connection URL
         """
         self.database_url = database_url
         self.logger = logging.getLogger(__name__)
         
-        # Configurar engine
+        # Configure engine
         if database_url.startswith('sqlite'):
-            # Configuração especial para SQLite (desenvolvimento)
+            # Special configuration for SQLite (development)
             self.engine = create_engine(
                 database_url,
                 poolclass=StaticPool,

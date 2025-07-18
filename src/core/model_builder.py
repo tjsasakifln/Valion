@@ -1,6 +1,6 @@
 """
-Fase 3: Construção e Treinamento do Modelo Elastic Net
-Responsável por treinar o modelo de regressão com regularização.
+Phase 3: Elastic Net Model Construction and Training
+Responsible for training the regression model with regularization.
 """
 
 import pandas as pd
@@ -27,7 +27,7 @@ import time
 
 @dataclass
 class ModelPerformance:
-    """Métricas de performance do modelo."""
+    """Model performance metrics."""
     r2_score: float
     rmse: float
     mae: float
@@ -41,7 +41,7 @@ class ModelPerformance:
 
 @dataclass
 class ModelResult:
-    """Resultado do treinamento do modelo."""
+    """Model training result."""
     model: Any  # Can be ElasticNet, XGBoost, or GradientBoosting
     performance: ModelPerformance
     best_params: Dict[str, Any]
@@ -51,7 +51,7 @@ class ModelResult:
 
 
 class ModelBuilder:
-    """Construtor de modelos para avaliação imobiliária com Modo Especialista."""
+    """Model builder for real estate evaluation with Expert Mode."""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config

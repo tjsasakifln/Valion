@@ -1,6 +1,6 @@
 """
-Fase 1: Ingestão e Validação de Dados
-Responsável por carregar, validar e preparar dados imobiliários para análise.
+Phase 1: Data Ingestion and Validation
+Responsible for loading, validating and preparing real estate data for analysis.
 """
 
 import pandas as pd
@@ -17,7 +17,7 @@ import warnings
 
 @dataclass
 class DataValidationResult:
-    """Resultado da validação de dados aprimorado."""
+    """Enhanced data validation result."""
     is_valid: bool
     errors: List[str]
     warnings: List[str]

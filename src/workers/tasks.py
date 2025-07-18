@@ -1,6 +1,6 @@
 """
-Worker Celery para processamento assíncrono
-Executa tarefas computacionalmente intensivas sem travar a interface.
+Celery Worker for asynchronous processing
+Executes computationally intensive tasks without blocking the interface.
 """
 
 from celery import Celery
@@ -19,7 +19,7 @@ from sqlalchemy.exc import OperationalError, IntegrityError, DatabaseError
 import redis
 from contextlib import contextmanager
 
-# Imports dos módulos core
+# Core module imports
 from src.core.data_loader import DataLoader
 from src.core.transformations import VariableTransformer
 from src.core.model_builder import ModelBuilder

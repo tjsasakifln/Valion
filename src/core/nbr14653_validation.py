@@ -1,6 +1,6 @@
 """
-Fase 4: Validação NBR 14653
-Implementa bateria completa de testes exigidos pela norma técnica brasileira.
+Phase 4: NBR 14653 Validation
+Implements complete battery of tests required by the Brazilian technical standard.
 """
 
 import pandas as pd

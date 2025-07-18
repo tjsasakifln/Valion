@@ -1,325 +1,343 @@
-# Valion - Plataforma de Avaliação Imobiliária
+# Valion - Real Estate Evaluation Platform
 
-Uma plataforma "caixa de vidro" para avaliação imobiliária com foco em transparência, auditabilidade e rigor estatístico, seguindo a norma NBR 14653.
+[![License: BSL-1.1](https://img.shields.io/badge/License-BSL--1.1-blue.svg)](https://github.com/tjsasakifln/Valion/blob/main/LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
+[![Docker](https://img.shields.io/badge/Docker-enabled-blue.svg)](https://www.docker.com/)
 
-## 🏗️ Arquitetura
+> **Advanced Glass-Box Real Estate Valuation Platform** - Transparent, auditable, and statistically rigorous property evaluation following NBR 14653 standards.
 
-### Arquitetura Desacoplada e Escalável
+## 🎯 Key Features
 
-- **Frontend**: Streamlit (Thin client)
-- **Backend**: FastAPI (API REST + WebSocket)
-- **Workers**: Celery (Processamento assíncrono)
+✨ **Complete Transparency** - Every step of the evaluation process is auditable and explainable  
+📊 **NBR 14653 Compliance** - Full battery of statistical tests meeting Brazilian technical standards  
+⚡ **Real-time Processing** - Asynchronous architecture with live progress updates  
+🔬 **Scientific Rigor** - Elastic Net regression with comprehensive statistical validation  
+🏗️ **Enterprise Ready** - Scalable microservices architecture with Docker containerization  
+📈 **Advanced Analytics** - SHAP analysis, geospatial intelligence, and interactive dashboards  
+
+## 🚀 Quick Start
+
+### 🐳 Docker (Recommended)
+
+```bash
+git clone https://github.com/tjsasakifln/Valion.git
+cd Valion
+cp .env.example .env
+docker-compose up --build
+```
+
+**Access Points:**
+- 🖥️ **Frontend**: http://localhost:8501
+- 🔌 **API**: http://localhost:8000  
+- 📊 **API Docs**: http://localhost:8000/docs
+- 🌺 **Task Monitor**: http://localhost:5555
+
+### 🛠️ Local Development
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Start services (requires 3 terminals)
+# Terminal 1: API Server
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2: Celery Worker
+celery -A src.workers.tasks worker --loglevel=info
+
+# Terminal 3: Streamlit Frontend  
+streamlit run frontend.py --server.port 8501
+```
+
+## 🏗️ Architecture
+
+### Technology Stack
+- **Frontend**: Streamlit (Interactive UI)
+- **Backend**: FastAPI (REST API + WebSocket)
+- **Workers**: Celery (Asynchronous processing)
 - **Database**: PostgreSQL
 - **Cache/Broker**: Redis
-- **Containerização**: Docker
+- **Containerization**: Docker + Docker Compose
 
-### Estrutura do Projeto
-
+### Project Structure
 ```
 Valion/
 ├── src/
-│   ├── core/                    # Motor analítico
-│   │   ├── data_loader.py       # Fase 1: Ingestão e validação
-│   │   ├── transformations.py   # Fase 2: Transformação de variáveis
-│   │   ├── model_builder.py     # Fase 3: Modelo Elastic Net
-│   │   ├── nbr14653_validation.py # Fase 4: Validação NBR 14653
-│   │   └── results_generator.py # Fase 5: Geração de relatórios
-│   ├── api/
-│   │   └── main.py             # API FastAPI
-│   ├── workers/
-│   │   └── tasks.py            # Tasks Celery
-│   └── config/
-│       └── settings.py         # Configurações centralizadas
-├── frontend.py                 # Interface Streamlit
-├── requirements.txt            # Dependências Python
-├── Dockerfile                  # Containerização
-├── docker-compose.yml          # Orquestração
-├── .env.example               # Exemplo de variáveis de ambiente
-└── README.md                  # Este arquivo
+│   ├── core/                     # Analytics Engine
+│   │   ├── data_loader.py        # Phase 1: Data ingestion & validation
+│   │   ├── transformations.py    # Phase 2: Feature engineering
+│   │   ├── model_builder.py      # Phase 3: Elastic Net modeling
+│   │   ├── nbr14653_validation.py # Phase 4: NBR 14653 validation
+│   │   ├── results_generator.py  # Phase 5: Report generation
+│   │   └── geospatial_analysis.py # Geospatial intelligence
+│   ├── api/main.py              # FastAPI application
+│   ├── workers/tasks.py         # Celery background tasks
+│   ├── websocket/               # Real-time communication
+│   └── config/settings.py       # Centralized configuration
+├── frontend.py                  # Streamlit interface
+├── requirements.txt             # Python dependencies
+├── Dockerfile                   # Container definition
+├── docker-compose.yml           # Service orchestration
+└── README.md                    # This file
 ```
 
-## 🎯 Funcionalidades Principais
+## 🔬 Technical Methodology
 
-### 1. Transparência Total ("Caixa de Vidro")
-- Todos os passos do processo são auditáveis
-- Relatórios detalhados com fundamentos estatísticos
-- Metodologia baseada em princípios científicos sólidos
+### Statistical Model
+- **Algorithm**: Elastic Net Regression (L1 + L2 regularization)
+- **Validation**: 5-fold cross-validation
+- **Optimization**: Grid search for hyperparameters
+- **Interpretability**: SHAP (SHapley Additive exPlanations) values
 
-### 2. Conformidade NBR 14653
-- Bateria completa de testes estatísticos
-- Classificação automática do grau de precisão
-- Validação rigorosa dos resultados
+### 5-Phase Evaluation Process
 
-### 3. Processamento Assíncrono
-- Interface responsiva com feedback em tempo real
-- Processamento paralelo de tarefas computacionalmente intensivas
-- Monitoramento de progresso via WebSocket
+#### 📥 Phase 1: Data Ingestion & Validation
+- Multi-format support (CSV, Excel, JSON)
+- Automated data quality assessment
+- Outlier detection and handling
+- Missing data analysis and imputation
 
-### 4. Escalabilidade
-- Arquitetura microserviços
-- Containerização com Docker
-- Balanceamento de carga automático
+#### 🔧 Phase 2: Feature Engineering  
+- Automated feature transformation
+- Categorical variable encoding
+- Feature selection with statistical tests
+- Data normalization and scaling
 
-## 🔬 Metodologia Técnica
+#### 🤖 Phase 3: Model Training
+- Elastic Net regression with hyperparameter optimization
+- Cross-validation for model generalization
+- Feature importance analysis
+- Performance metric calculation
 
-### Modelo Estatístico
-- **Algoritmo**: Elastic Net Regression
-- **Regularização**: Combinação L1 (Lasso) + L2 (Ridge)
-- **Validação**: Cross-validation 5-fold
-- **Otimização**: Grid Search para hiperparâmetros
+#### ✅ Phase 4: NBR 14653 Validation
+- **R² Test**: Coefficient of determination
+- **F-Test**: Overall model significance
+- **t-Test**: Individual coefficient significance  
+- **Shapiro-Wilk**: Residual normality
+- **Durbin-Watson**: Autocorrelation detection
+- **VIF**: Multicollinearity assessment
 
-### Fases do Processo
+#### 📋 Phase 5: Report Generation
+- Comprehensive statistical analysis
+- Visual diagnostics and charts
+- Technical recommendations
+- Multi-format export (PDF, Excel, JSON)
 
-1. **Ingestão e Validação**
-   - Carregamento de dados (CSV, Excel)
-   - Validação de qualidade
-   - Detecção de outliers
-   - Análise de completude
+## 📊 NBR 14653 Precision Levels
 
-2. **Transformação de Variáveis**
-   - Engenharia de features
-   - Normalização
-   - Codificação de variáveis categóricas
-   - Seleção de features
+| Grade | Minimum R² | Description |
+|-------|------------|-------------|
+| **Superior** | ≥ 0.90 | Excellent explanatory capacity |
+| **Normal** | ≥ 0.80 | Good explanatory capacity |
+| **Inferior** | ≥ 0.70 | Adequate explanatory capacity |
+| **Inadequate** | < 0.70 | Insufficient explanatory capacity |
 
-3. **Modelagem**
-   - Treinamento Elastic Net
-   - Otimização de hiperparâmetros
-   - Validação cruzada
-   - Análise de performance
+## 🧪 Statistical Tests
 
-4. **Validação NBR 14653**
-   - Teste de coeficiente de determinação (R²)
-   - Teste F de significância
-   - Teste t dos coeficientes
-   - Teste de normalidade dos resíduos
-   - Teste de autocorrelação (Durbin-Watson)
-   - Teste de multicolinearidade (VIF)
+### Core Validation Battery
 
-5. **Geração de Relatórios**
-   - Consolidação de resultados
-   - Análise de conclusões
-   - Recomendações técnicas
-   - Exportação em múltiplos formatos
+1. **Coefficient of Determination (R²)**
+   - Measures proportion of variance explained
+   - Primary criterion for NBR classification
 
-## 🚀 Instalação e Execução
+2. **F-Test for Significance**
+   - Tests overall model significance
+   - H₀: All coefficients equal zero
 
-### Pré-requisitos
-- Python 3.11+
-- Docker e Docker Compose
-- Redis
-- PostgreSQL (opcional para desenvolvimento)
+3. **t-Test for Coefficients**
+   - Tests individual coefficient significance
+   - H₀: Specific coefficient equals zero
 
-### Instalação Local
+4. **Shapiro-Wilk Normality Test**
+   - Verifies residual normality assumption
+   - H₀: Residuals follow normal distribution
 
-1. **Clone o repositório**
-   ```bash
-   git clone https://github.com/seu-usuario/valion.git
-   cd valion
-   ```
+5. **Durbin-Watson Autocorrelation**
+   - Detects serial correlation in residuals
+   - Values 1.5-2.5 indicate no autocorrelation
 
-2. **Configure o ambiente**
-   ```bash
-   cp .env.example .env
-   # Edite as variáveis de ambiente conforme necessário
-   ```
+6. **Variance Inflation Factor (VIF)**
+   - Measures multicollinearity severity
+   - VIF < 10 indicates acceptable collinearity
 
-3. **Instale as dependências**
-   ```bash
-   pip install -r requirements.txt
-   ```
+## 📈 Performance Metrics
 
-4. **Execute os serviços**
-   ```bash
-   # Terminal 1: API
-   uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
-   
-   # Terminal 2: Worker Celery
-   celery -A src.workers.tasks worker --loglevel=info
-   
-   # Terminal 3: Frontend
-   streamlit run frontend.py --server.port 8501
-   ```
+### Primary Metrics
+- **R²**: Coefficient of determination
+- **RMSE**: Root Mean Square Error
+- **MAE**: Mean Absolute Error  
+- **MAPE**: Mean Absolute Percentage Error
 
-### Instalação com Docker
+### Cross-Validation
+- **5-Fold CV**: Robust generalization assessment
+- **Stability Analysis**: Performance consistency across folds
 
-1. **Construir e executar**
-   ```bash
-   docker-compose up --build
-   ```
+## 🔧 Configuration
 
-2. **Acessar a aplicação**
-   - Frontend: http://localhost:8501
-   - API: http://localhost:8000
-   - Flower (Monitor): http://localhost:5555
+### Environment Variables
 
-## 📊 Níveis de Precisão NBR 14653
-
-| Grau | R² Mínimo | Descrição |
-|------|-----------|-----------|
-| Superior | ≥ 0,90 | Excelente capacidade explanatória |
-| Normal | ≥ 0,80 | Boa capacidade explanatória |
-| Inferior | ≥ 0,70 | Capacidade explanatória adequada |
-| Inadequado | < 0,70 | Capacidade explanatória insuficiente |
-
-## 🧪 Testes Estatísticos
-
-### Testes Implementados
-
-1. **Coeficiente de Determinação (R²)**
-   - Mede a proporção da variância explicada
-   - Critério principal para classificação NBR
-
-2. **Teste F de Significância**
-   - Testa significância global do modelo
-   - H₀: Todos os coeficientes são zero
-
-3. **Teste t dos Coeficientes**
-   - Testa significância individual dos coeficientes
-   - H₀: Coeficiente específico é zero
-
-4. **Teste de Normalidade (Shapiro-Wilk)**
-   - Verifica normalidade dos resíduos
-   - H₀: Resíduos seguem distribuição normal
-
-5. **Teste de Autocorrelação (Durbin-Watson)**
-   - Detecta correlação serial nos resíduos
-   - Valores entre 1,5 e 2,5 indicam ausência de autocorrelação
-
-6. **Teste de Multicolinearidade (VIF)**
-   - Variance Inflation Factor
-   - VIF < 10 indica ausência de multicolinearidade severa
-
-## 📈 Métricas de Performance
-
-### Métricas Principais
-
-- **R² (Coeficiente de Determinação)**: Proporção da variância explicada
-- **RMSE (Root Mean Square Error)**: Erro quadrático médio
-- **MAE (Mean Absolute Error)**: Erro absoluto médio
-- **MAPE (Mean Absolute Percentage Error)**: Erro percentual absoluto médio
-
-### Validação Cruzada
-
-- **K-Fold Cross-Validation**: 5 folds
-- **Métricas**: RMSE médio e desvio padrão
-- **Objetivo**: Avaliar generalização do modelo
-
-## 🔧 Configuração
-
-### Variáveis de Ambiente
-
-Consulte `.env.example` para lista completa de variáveis configuráveis.
-
-### Configuração Avançada
-
-O arquivo `src/config/settings.py` permite configuração detalhada de:
-
-- Parâmetros do modelo
-- Thresholds NBR 14653
-- Configurações de API
-- Configurações de logging
-- Configurações de segurança
-
-## 🛡️ Segurança
-
-### Medidas Implementadas
-
-- Validação rigorosa de entrada
-- Sanitização de dados
-- Autenticação JWT (implementação futura)
-- Isolamento de containers
-- Logs de auditoria
-
-### Boas Práticas
-
-- Usuário não-root em containers
-- Validação de tipos com Pydantic
-- Tratamento seguro de arquivos
-- Configurações sensíveis via variáveis de ambiente
-
-## 📋 API Documentation
-
-### Endpoints Principais
-
-- `POST /evaluations/`: Inicia nova avaliação
-- `GET /evaluations/{id}`: Status da avaliação
-- `GET /evaluations/{id}/result`: Resultado da avaliação
-- `POST /evaluations/{id}/predict`: Fazer predição
-- `POST /upload`: Upload de arquivo
-- `GET /health`: Health check
-
-### WebSocket
-
-- `WS /ws/{evaluation_id}`: Feedback em tempo real
-
-Acesse http://localhost:8000/docs para documentação interativa.
-
-## 🧪 Testes
+Key configuration options (see `.env.example`):
 
 ```bash
-# Executar todos os testes
+# Application
+ENVIRONMENT=development
+DEBUG=true
+SECRET_KEY=your-secret-key
+
+# Database
+DATABASE_URL=postgresql://user:pass@localhost/valion
+REDIS_URL=redis://localhost:6379
+
+# Model Parameters
+ELASTIC_NET_ALPHA=1.0
+ELASTIC_NET_L1_RATIO=0.5
+CV_FOLDS=5
+
+# NBR Thresholds
+NBR_R2_SUPERIOR=0.90
+NBR_R2_NORMAL=0.80
+NBR_R2_INFERIOR=0.70
+```
+
+### Advanced Configuration
+
+The `src/config/settings.py` file enables detailed configuration of:
+- Model hyperparameters and validation thresholds
+- API security and rate limiting settings
+- Logging levels and audit trail options
+- Database connection pooling
+- Celery worker configurations
+
+## 🛡️ Security & Compliance
+
+### Security Measures
+- Input validation and sanitization
+- SQL injection prevention
+- XSS protection with Content Security Policy
+- Rate limiting and DDoS protection
+- Secure file upload handling
+- Audit logging for all operations
+
+### Best Practices
+- Non-root container execution
+- Pydantic type validation
+- Environment-based secret management
+- Secure communication protocols
+- Regular dependency updates
+
+## 📋 API Reference
+
+### Core Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/evaluations/` | Start new evaluation |
+| `GET` | `/evaluations/{id}` | Get evaluation status |
+| `GET` | `/evaluations/{id}/result` | Retrieve evaluation results |
+| `POST` | `/evaluations/{id}/predict` | Make predictions |
+| `POST` | `/upload` | Upload data files |
+| `GET` | `/health` | Health check |
+
+### WebSocket
+- `WS /ws/{evaluation_id}`: Real-time progress updates
+
+📖 **Interactive Documentation**: http://localhost:8000/docs
+
+## 🧪 Testing
+
+```bash
+# Run all tests
 pytest
 
-# Executar com coverage
-pytest --cov=src
+# Run with coverage report
+pytest --cov=src --cov-report=html
 
-# Executar testes específicos
-pytest tests/test_model_builder.py
+# Run specific test modules
+pytest tests/test_model_builder.py -v
+
+# Run integration tests
+pytest tests/integration/ -v
 ```
 
 ## 📦 Deployment
 
-### Produção
+### Production Deployment
 
-1. **Configure variáveis de ambiente**
+1. **Environment Setup**
    ```bash
    ENVIRONMENT=production
    DEBUG=false
    SECRET_KEY=your-production-secret-key
    ```
 
-2. **Execute com Docker Compose**
+2. **Docker Deployment**
    ```bash
    docker-compose -f docker-compose.prod.yml up -d
    ```
 
-3. **Configure proxy reverso** (nginx, traefik, etc.)
+3. **Reverse Proxy Configuration** (nginx/traefik recommended)
 
-### Monitoramento
+### Monitoring & Observability
 
-- **Logs**: Configuráveis via variáveis de ambiente
-- **Métricas**: Integração com Prometheus/Grafana
-- **Health Checks**: Endpoints de monitoramento
-- **Flower**: Monitor Celery em tempo real
+- **Application Logs**: Structured JSON logging
+- **Metrics**: Prometheus/Grafana integration ready
+- **Health Checks**: Kubernetes-compatible endpoints
+- **Task Monitoring**: Flower dashboard for Celery
+- **Error Tracking**: Sentry integration available
 
-## 🤝 Contribuição
+## 🤝 Contributing
 
-1. Fork o projeto
-2. Crie uma branch para sua feature
-3. Commit suas mudanças
-4. Push para a branch
-5. Abra um Pull Request
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-## 📄 Licença
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-Este projeto está sob a licença MIT. Veja o arquivo LICENSE para detalhes.
+## 📄 License
 
-## 🔗 Links Úteis
+This project is licensed under the **Business Source License 1.1** (BSL-1.1).
 
-- [NBR 14653](https://www.abnt.org.br/normalizacao/lista-de-normas/nbr)
+- ✅ **Free for development, testing, and non-production use**
+- ✅ **Open source with full transparency**
+- ⏰ **Converts to Apache 2.0 after 4 years**
+- 📋 **Commercial use requires separate license**
+
+See [LICENSE](LICENSE) file for complete details.
+
+## 🔗 Resources
+
+### Documentation
+- [NBR 14653 Standards](https://www.abnt.org.br/normalizacao/lista-de-normas/nbr)
 - [Elastic Net Regression](https://scikit-learn.org/stable/modules/linear_model.html#elastic-net)
+- [SHAP Documentation](https://shap.readthedocs.io/)
+
+### Framework Documentation
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
 - [Streamlit Documentation](https://docs.streamlit.io/)
 - [Celery Documentation](https://docs.celeryproject.org/)
 
-## 📞 Suporte
+## 📞 Support
 
-Para dúvidas e suporte:
-- Abra uma issue no GitHub
-- Consulte a documentação
-- Entre em contato com a equipe de desenvolvimento
+### Getting Help
+- 📖 Check our [Documentation](docs/)
+- 🐛 [Report Issues](https://github.com/tjsasakifln/Valion/issues)
+- 💬 [Discussions](https://github.com/tjsasakifln/Valion/discussions)
+- 📧 Contact: tiago@confenge.com.br
+
+### Professional Services
+For enterprise support, custom development, or consulting services, please contact our team.
 
 ---
 
-**Valion** - Transparência e rigor estatístico em avaliação imobiliária 🏠📊
+<div align="center">
+
+**🏠 Valion** - *Transparency and Statistical Rigor in Real Estate Evaluation*
+
+Made with ❤️ for the real estate and data science community
+
+[⭐ Star this repo](https://github.com/tjsasakifln/Valion) | [🐛 Report Bug](https://github.com/tjsasakifln/Valion/issues) | [💡 Request Feature](https://github.com/tjsasakifln/Valion/issues)
+
+</div>

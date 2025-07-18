@@ -1,6 +1,6 @@
 """
-Frontend Streamlit para Valion - Aplicação "Thin Client"
-Interface de usuário responsável por renderizar a UI e orquestrar chamadas à API.
+Streamlit Frontend for Valion - "Thin Client" Application
+User interface responsible for rendering the UI and orchestrating API calls.
 """
 
 import streamlit as st
@@ -20,19 +20,19 @@ from pathlib import Path
 import asyncio
 import websockets
 
-# Configuração da página
+# Page configuration
 st.set_page_config(
-    page_title="Valion - Avaliação Imobiliária",
+    page_title="Valion - Real Estate Evaluation",
     page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Configurações da API
+# API settings
 API_BASE_URL = "http://localhost:8000"
 WS_BASE_URL = "ws://localhost:8000"
 
-# Estilos CSS customizados
+# Custom CSS styles
 st.markdown("""
 <style>
     .main-header {
@@ -130,7 +130,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Estado da aplicação
+# Application state
 if 'evaluation_id' not in st.session_state:
     st.session_state.evaluation_id = None
 if 'evaluation_status' not in st.session_state:
@@ -144,19 +144,19 @@ if 'websocket_connected' not in st.session_state:
 if 'realtime_updates' not in st.session_state:
     st.session_state.realtime_updates = []
 
-# Funções utilitárias
+# Utility functions
 def call_api(endpoint: str, method: str = "GET", data: Optional[Dict] = None, files: Optional[Dict] = None):
     """
-    Faz chamada para a API.
+    Makes call to the API.
     
     Args:
-        endpoint: Endpoint da API
-        method: Método HTTP
-        data: Dados para enviar
-        files: Arquivos para enviar
+        endpoint: API endpoint
+        method: HTTP method
+        data: Data to send
+        files: Files to send
         
     Returns:
-        Resposta da API
+        API response
     """
     url = f"{API_BASE_URL}{endpoint}"
     
@@ -173,29 +173,29 @@ def call_api(endpoint: str, method: str = "GET", data: Optional[Dict] = None, fi
         elif method == "DELETE":
             response = requests.delete(url)
         else:
-            raise ValueError(f"Método não suportado: {method}")
+            raise ValueError(f"Unsupported method: {method}")
         
         if response.status_code == 200:
             return response.json()
         elif response.status_code == 202:
-            return {"status": "processing", "message": "Processando..."}
+            return {"status": "processing", "message": "Processing..."}
         else:
-            st.error(f"Erro na API: {response.status_code} - {response.text}")
+            st.error(f"API error: {response.status_code} - {response.text}")
             return None
             
     except Exception as e:
-        st.error(f"Erro ao conectar com a API: {str(e)}")
+        st.error(f"Error connecting to API: {str(e)}")
         return None
 
 def upload_file(file):
     """
-    Faz upload de arquivo para a API.
+    Uploads file to the API.
     
     Args:
-        file: Arquivo do Streamlit
+        file: Streamlit file
         
     Returns:
-        Caminho do arquivo no servidor
+        File path on server
     """
     files = {"file": (file.name, file, file.type)}
     result = call_api("/upload", method="POST", files=files)
@@ -206,14 +206,14 @@ def upload_file(file):
 
 def start_evaluation(file_path: str, target_column: str = "valor"):
     """
-    Inicia avaliação na API.
+    Starts evaluation in the API.
     
     Args:
-        file_path: Caminho do arquivo
-        target_column: Coluna target
+        file_path: File path
+        target_column: Target column
         
     Returns:
-        ID da avaliação
+        Evaluation ID
     """
     data = {
         "file_path": file_path,
@@ -228,34 +228,34 @@ def start_evaluation(file_path: str, target_column: str = "valor"):
 
 def get_evaluation_status(evaluation_id: str):
     """
-    Obtém status da avaliação.
+    Gets evaluation status.
     
     Args:
-        evaluation_id: ID da avaliação
+        evaluation_id: Evaluation ID
         
     Returns:
-        Status da avaliação
+        Evaluation status
     """
     return call_api(f"/evaluations/{evaluation_id}")
 
 def get_evaluation_result(evaluation_id: str):
     """
-    Obtém resultado da avaliação.
+    Gets evaluation result.
     
     Args:
-        evaluation_id: ID da avaliação
+        evaluation_id: Evaluation ID
         
     Returns:
-        Resultado da avaliação
+        Evaluation result
     """
     return call_api(f"/evaluations/{evaluation_id}/result")
 
 def setup_websocket_connection(evaluation_id: str):
     """
-    Configura conexão WebSocket para updates em tempo real.
+    Sets up WebSocket connection for real-time updates.
     
     Args:
-        evaluation_id: ID da avaliação para monitorar
+        evaluation_id: Evaluation ID to monitor
     """
     if st.session_state.websocket_connected:
         return
@@ -275,46 +275,46 @@ def setup_websocket_connection(evaluation_id: str):
                             message = await websocket.recv()
                             data = json.loads(message)
                             
-                            # Adicionar update à lista
+                            # Add update to list
                             st.session_state.realtime_updates.append(data)
                             
-                            # Manter apenas os últimos 50 updates
+                            # Keep only the last 50 updates
                             if len(st.session_state.realtime_updates) > 50:
                                 st.session_state.realtime_updates = st.session_state.realtime_updates[-50:]
                             
-                            # Forçar rerun do Streamlit se for update importante
+                            # Force Streamlit rerun if important update
                             if data.get('type') == 'progress_update':
                                 st.rerun()
                                 
                 except Exception as e:
                     st.session_state.websocket_connected = False
-                    st.error(f"Erro na conexão WebSocket: {e}")
+                    st.error(f"WebSocket connection error: {e}")
             
-            # Executar em loop assíncrono
+            # Execute in asynchronous loop
             try:
                 asyncio.run(listen())
             except Exception as e:
                 st.session_state.websocket_connected = False
         
-        # Iniciar listener em thread separada
+        # Start listener in separate thread
         if not st.session_state.websocket_connected:
             thread = threading.Thread(target=websocket_listener, daemon=True)
             thread.start()
             
     except Exception as e:
-        st.warning(f"WebSocket não disponível: {e}")
+        st.warning(f"WebSocket not available: {e}")
 
 def get_latest_realtime_status():
     """
-    Obtém o status mais recente dos updates em tempo real.
+    Gets the most recent status from real-time updates.
     
     Returns:
-        Dict com status mais recente ou None
+        Dict with most recent status or None
     """
     if not st.session_state.realtime_updates:
         return None
     
-    # Pegar o update mais recente que seja do tipo progress_update
+    # Get the most recent update that is of type progress_update
     for update in reversed(st.session_state.realtime_updates):
         if update.get('type') == 'progress_update':
             return update
@@ -323,13 +323,13 @@ def get_latest_realtime_status():
 
 def create_performance_chart(performance_data: Dict[str, Any]):
     """
-    Cria gráfico de performance do modelo.
+    Creates model performance chart.
     
     Args:
-        performance_data: Dados de performance
+        performance_data: Performance data
         
     Returns:
-        Figura do Plotly
+        Plotly figure
     """
     metrics = ['R²', 'RMSE', 'MAE', 'MAPE']
     values = [
@@ -339,7 +339,7 @@ def create_performance_chart(performance_data: Dict[str, Any]):
         performance_data.get('mape', 0)
     ]
     
-    # Normalizar valores para visualização
+    # Normalize values for visualization
     normalized_values = []
     for i, value in enumerate(values):
         if i == 0:  # R²
@@ -356,9 +356,9 @@ def create_performance_chart(performance_data: Dict[str, Any]):
     ])
     
     fig.update_layout(
-        title="Métricas de Performance do Modelo",
-        xaxis_title="Métricas",
-        yaxis_title="Valores",
+        title="Model Performance Metrics",
+        xaxis_title="Metrics",
+        yaxis_title="Values",
         height=400
     )
     
@@ -366,13 +366,13 @@ def create_performance_chart(performance_data: Dict[str, Any]):
 
 def create_nbr_tests_chart(nbr_data: Dict[str, Any]):
     """
-    Cria gráfico dos testes NBR 14653.
+    Creates NBR 14653 tests chart.
     
     Args:
-        nbr_data: Dados dos testes NBR
+        nbr_data: NBR test data
         
     Returns:
-        Figura do Plotly
+        Plotly figure
     """
     tests = nbr_data.get('individual_tests', [])
     
@@ -386,32 +386,32 @@ def create_nbr_tests_chart(nbr_data: Dict[str, Any]):
             x=test_names,
             y=test_results,
             marker_color=colors,
-            text=['Passou' if result else 'Falhou' for result in test_results],
+            text=['Passed' if result else 'Failed' for result in test_results],
             textposition='auto'
         )
     ])
     
     fig.update_layout(
-        title="Resultados dos Testes NBR 14653",
-        xaxis_title="Testes",
-        yaxis_title="Resultado",
+        title="NBR 14653 Test Results",
+        xaxis_title="Tests",
+        yaxis_title="Result",
         height=400,
-        yaxis=dict(tickmode='array', tickvals=[0, 1], ticktext=['Falhou', 'Passou'])
+        yaxis=dict(tickmode='array', tickvals=[0, 1], ticktext=['Failed', 'Passed'])
     )
     
     return fig
 
 def create_feature_importance_chart(feature_importance: Dict[str, float]):
     """
-    Cria gráfico de importância das features.
+    Creates feature importance chart.
     
     Args:
-        feature_importance: Importância das features
+        feature_importance: Feature importance
         
     Returns:
-        Figura do Plotly
+        Plotly figure
     """
-    # Ordenar por importância
+    # Sort by importance
     sorted_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)
     
     # Pegar top 10
@@ -435,68 +435,68 @@ def create_feature_importance_chart(feature_importance: Dict[str, float]):
     ])
     
     fig.update_layout(
-        title="Importância das Features (Top 10)",
-        xaxis_title="Importância",
+        title="Feature Importance (Top 10)",
+        xaxis_title="Importance",
         yaxis_title="Features",
         height=400
     )
     
     return fig
 
-# Interface principal
+# Main interface
 def main():
-    """Interface principal da aplicação."""
+    """Main application interface."""
     
-    # Cabeçalho
-    st.markdown('<div class="main-header">🏠 Valion - Avaliação Imobiliária</div>', unsafe_allow_html=True)
+    # Header
+    st.markdown('<div class="main-header">🏠 Valion - Real Estate Evaluation</div>', unsafe_allow_html=True)
     
-    # Sidebar com navegação
+    # Sidebar with navigation
     st.sidebar.title("Menu")
-    page = st.sidebar.radio("Escolha uma opção", [
-        "Nova Avaliação", 
-        "Fluxo Guiado",
-        "Acompanhar Avaliação", 
-        "Resultados", 
-        "Predições",
-        "Laboratório SHAP",
-        "Sobre"
+    page = st.sidebar.radio("Choose an option", [
+        "New Evaluation", 
+        "Guided Workflow",
+        "Track Evaluation", 
+        "Results", 
+        "Predictions",
+        "SHAP Laboratory",
+        "About"
     ])
     
-    if page == "Nova Avaliação":
+    if page == "New Evaluation":
         show_new_evaluation_page()
-    elif page == "Fluxo Guiado":
+    elif page == "Guided Workflow":
         show_guided_workflow_page()
-    elif page == "Acompanhar Avaliação":
+    elif page == "Track Evaluation":
         show_evaluation_tracking_page()
-    elif page == "Resultados":
+    elif page == "Results":
         show_results_page()
-    elif page == "Predições":
+    elif page == "Predictions":
         show_predictions_page()
-    elif page == "Laboratório SHAP":
+    elif page == "SHAP Laboratory":
         show_shap_laboratory_page()
-    elif page == "Sobre":
+    elif page == "About":
         show_about_page()
 
 def show_new_evaluation_page():
-    """Página para nova avaliação."""
+    """Page for new evaluation."""
     
-    st.header("Nova Avaliação Imobiliária")
+    st.header("New Real Estate Evaluation")
     
-    # Seção de transparência
+    # Transparency section
     st.markdown("""
     <div class="transparency-box">
-        <h4>🔍 Transparência e Auditabilidade</h4>
-        <p>A Valion é uma plataforma "caixa de vidro" que garante total transparência no processo de avaliação imobiliária. 
-        Todos os passos são documentados e auditáveis, seguindo rigorosamente a norma NBR 14653.</p>
+        <h4>🔍 Transparency and Auditability</h4>
+        <p>Valion is a "glass box" platform that guarantees total transparency in the real estate evaluation process. 
+        All steps are documented and auditable, strictly following the NBR 14653 standard.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Upload de arquivo
-    st.subheader("1. Upload dos Dados")
+    # File upload
+    st.subheader("1. Data Upload")
     uploaded_file = st.file_uploader(
-        "Escolha um arquivo com dados imobiliários",
+        "Choose a file with real estate data",
         type=['csv', 'xlsx', 'xls'],
-        help="Formatos suportados: CSV, Excel (.xlsx, .xls)"
+        help="Supported formats: CSV, Excel (.xlsx, .xls)"
     )
     
     if uploaded_file is not None:
@@ -1949,7 +1949,7 @@ def show_shap_laboratory_page():
         else:
             st.info("📡 Aguardando carregamento do laboratório...")
     
-    # Interface principal do laboratório
+    # Main interface do laboratório
     if st.session_state.lab_features_config:
         show_shap_simulation_interface(evaluation_id, st.session_state.lab_features_config)
 

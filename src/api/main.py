@@ -1,6 +1,6 @@
 """
-API FastAPI para Valion - Plataforma de Avaliação Imobiliária
-Responsável por servir a API e gerenciar conexões WebSocket.
+FastAPI API for Valion - Real Estate Evaluation Platform
+Responsible for serving the API and managing WebSocket connections.
 """
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 import os
 
-# Imports dos módulos core
+# Core module imports
 from src.core.data_loader import DataLoader, DataValidationResult
 import magic
 from src.core.transformations import VariableTransformer, TransformationResult
@@ -29,18 +29,18 @@ from src.config.settings import Settings
 from src.workers.tasks import process_evaluation
 from src.websocket.websocket_manager import websocket_manager
 
-# Configuração de logging
+# Logging configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicialização da aplicação
+# Application initialization
 app = FastAPI(
     title="Valion API",
-    description="API para avaliação imobiliária com transparência e auditabilidade",
+    description="API for real estate evaluation with transparency and auditability",
     version="1.0.0"
 )
 
-# Configuração CORS
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,42 +49,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configurações
+# Settings
 settings = Settings()
 
-# Modelos Pydantic
+# Pydantic models
 class EvaluationRequest(BaseModel):
-    """Requisição de avaliação."""
+    """Evaluation request."""
     file_path: str
-    target_column: str = "valor"
+    target_column: str = "value"
     mode: str = "standard"  # "standard" ou "expert"
     config: Optional[Dict[str, Any]] = None
     
     def model_post_init(self, __context) -> None:
-        """Validação pós-inicialização."""
+        """Post-initialization validation."""
         if self.mode not in ["standard", "expert"]:
-            raise ValueError("Mode deve ser 'standard' ou 'expert'")
+            raise ValueError("Mode must be 'standard' or 'expert'")
         
-        # Configurar expert_mode no config baseado no mode
+        # Configure expert_mode in config based on mode
         if self.config is None:
             self.config = {}
         
         self.config['expert_mode'] = (self.mode == "expert")
         
-        # No modo expert, garantir que modelos avançados estejam disponíveis
+        # In expert mode, ensure advanced models are available
         if self.mode == "expert":
-            # Permitir modelos avançados no modo expert
+            # Allow advanced models in expert mode
             allowed_models = ['xgboost', 'gradient_boosting', 'elastic_net']
             if 'model_type' not in self.config:
-                self.config['model_type'] = 'xgboost'  # Padrão para expert mode
+                self.config['model_type'] = 'xgboost'  # Default for expert mode
             elif self.config['model_type'] not in allowed_models:
                 self.config['model_type'] = 'xgboost'
         else:
-            # Modo standard sempre usa Elastic Net
+            # Standard mode always uses Elastic Net
             self.config['model_type'] = 'elastic_net'
 
 class EvaluationStatus(BaseModel):
-    """Status da avaliação."""
+    """Evaluation status."""
     evaluation_id: str
     status: str
     current_phase: str
@@ -93,12 +93,12 @@ class EvaluationStatus(BaseModel):
     timestamp: datetime
 
 class PredictionRequest(BaseModel):
-    """Requisição de predição."""
+    """Prediction request."""
     evaluation_id: str
     features: Dict[str, Any]
 
 class StepApprovalRequest(BaseModel):
-    """Requisição de aprovação de etapa."""
+    """Step approval request."""
     evaluation_id: str
     step: str  # "transformations", "outliers", "model_selection"
     approved: bool
@@ -106,20 +106,20 @@ class StepApprovalRequest(BaseModel):
     user_feedback: Optional[str] = None
 
 class ShapSimulationRequest(BaseModel):
-    """Requisição de simulação SHAP para laboratório interativo."""
+    """SHAP simulation request for interactive laboratory."""
     evaluation_id: str
     feature_modifications: Dict[str, float]  # {feature_name: new_value}
     simulation_name: Optional[str] = None
     compare_to_baseline: bool = True
 
 class ShapWaterfallRequest(BaseModel):
-    """Requisição de gráfico waterfall SHAP."""
+    """SHAP waterfall chart request."""
     evaluation_id: str
     sample_index: int = 0
     feature_modifications: Optional[Dict[str, float]] = None
 
 class GeospatialAnalysisRequest(BaseModel):
-    """Requisição de análise geoespacial."""
+    """Geospatial analysis request."""
     address: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -127,52 +127,52 @@ class GeospatialAnalysisRequest(BaseModel):
     city_center_lon: Optional[float] = None
 
 class DataEnrichmentRequest(BaseModel):
-    """Requisição de enriquecimento geoespacial de dataset."""
+    """Dataset geospatial enrichment request."""
     evaluation_id: str
-    address_column: str = "endereco"
+    address_column: str = "address"
     city_center_lat: Optional[float] = None
     city_center_lon: Optional[float] = None
 
 
-# Armazenamento em memória para resultados (em produção, usar Redis/Database)
+# In-memory storage for results (in production, use Redis/Database)
 evaluation_results: Dict[str, Dict[str, Any]] = {}
 
-# Endpoints da API
+# API endpoints
 
 @app.get("/")
 async def root():
-    """Endpoint raiz."""
-    return {"message": "Valion API - Plataforma de Avaliação Imobiliária"}
+    """Root endpoint."""
+    return {"message": "Valion API - Real Estate Evaluation Platform"}
 
 @app.get("/health")
 async def health_check():
-    """Verifica saúde da API."""
+    """Checks API health."""
     return {"status": "healthy", "timestamp": datetime.now()}
 
 @app.post("/evaluations/", response_model=dict)
 async def create_evaluation(request: EvaluationRequest):
     """
-    Inicia uma nova avaliação imobiliária.
+    Starts a new real estate evaluation.
     
     Args:
-        request: Dados da requisição
+        request: Request data
         
     Returns:
-        ID da avaliação iniciada
+        ID of the started evaluation
     """
     evaluation_id = str(uuid.uuid4())
     
-    # Validar arquivo
+    # Validate file
     if not os.path.exists(request.file_path):
-        raise HTTPException(status_code=400, detail="Arquivo não encontrado")
+        raise HTTPException(status_code=400, detail="File not found")
     
-    # Inicializar status
+    # Initialize status
     status = EvaluationStatus(
         evaluation_id=evaluation_id,
-        status="iniciado",
-        current_phase="Carregando dados",
+        status="started",
+        current_phase="Loading data",
         progress=0.0,
-        message="Avaliação iniciada",
+        message="Evaluation started",
         timestamp=datetime.now()
     )
     
@@ -182,16 +182,16 @@ async def create_evaluation(request: EvaluationRequest):
         "result": None
     }
     
-    # Log do modo selecionado
-    logger.info(f"Avaliação {evaluation_id} iniciada em modo {request.mode}")
+    # Log selected mode
+    logger.info(f"Evaluation {evaluation_id} started in {request.mode} mode")
     
-    # Executar avaliação usando Celery
+    # Execute evaluation using Celery
     task = process_evaluation.delay(evaluation_id, request.file_path, request.target_column, request.config)
     
     return {
         "evaluation_id": evaluation_id, 
         "task_id": task.id, 
-        "status": "iniciado",
+        "status": "started",
         "mode": request.mode,
         "expert_mode_active": request.config.get('expert_mode', False)
     }
@@ -199,64 +199,64 @@ async def create_evaluation(request: EvaluationRequest):
 @app.get("/evaluations/{evaluation_id}")
 async def get_evaluation_status(evaluation_id: str):
     """
-    Obtém status da avaliação.
+    Gets evaluation status.
     
     Args:
-        evaluation_id: ID da avaliação
+        evaluation_id: Evaluation ID
         
     Returns:
-        Status atual da avaliação
+        Current evaluation status
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     return evaluation_results[evaluation_id]["status"]
 
 @app.get("/evaluations/{evaluation_id}/result")
 async def get_evaluation_result(evaluation_id: str):
     """
-    Obtém resultado da avaliação.
+    Gets evaluation result.
     
     Args:
-        evaluation_id: ID da avaliação
+        evaluation_id: Evaluation ID
         
     Returns:
-        Resultado completo da avaliação
+        Complete evaluation result
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     result = evaluation_results[evaluation_id]["result"]
     if result is None:
-        raise HTTPException(status_code=202, detail="Avaliação ainda em andamento")
+        raise HTTPException(status_code=202, detail="Evaluation still in progress")
     
     return result
 
 @app.post("/evaluations/{evaluation_id}/predict")
 async def make_prediction(evaluation_id: str, request: PredictionRequest):
     """
-    Faz predição usando modelo treinado.
+    Makes prediction using trained model.
     
     Args:
-        evaluation_id: ID da avaliação
-        request: Dados para predição
+        evaluation_id: Evaluation ID
+        request: Prediction data
         
     Returns:
-        Predição do valor
+        Value prediction
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     result = evaluation_results[evaluation_id]["result"]
     if result is None:
-        raise HTTPException(status_code=202, detail="Modelo ainda não treinado")
+        raise HTTPException(status_code=202, detail="Model not yet trained")
     
     try:
-        # Converter features para DataFrame
+        # Convert features to DataFrame
         features_df = pd.DataFrame([request.features])
         
-        # Fazer predição (assumindo que o modelo está disponível)
-        # Em implementação real, seria necessário aplicar as mesmas transformações
+        # Make prediction (assuming model is available)
+        # In real implementation, same transformations would need to be applied
         prediction = 0.0  # Placeholder
         
         return {
@@ -266,40 +266,40 @@ async def make_prediction(evaluation_id: str, request: PredictionRequest):
             "timestamp": datetime.now()
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro na predição: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
-    Faz upload de arquivo de dados com validações robustas.
+    Uploads data file with robust validations.
     
     Args:
-        file: Arquivo a ser enviado
+        file: File to be uploaded
         
     Returns:
-        Caminho do arquivo salvo e informações de validação
+        Saved file path and validation information
     """
-    # Validação de extensão
+    # Extension validation
     if not file.filename.endswith(('.csv', '.xlsx', '.xls')):
         raise HTTPException(
             status_code=400, 
-            detail=f"Formato de arquivo não suportado: {file.filename}. Use: .csv, .xlsx, .xls"
+            detail=f"Unsupported file format: {file.filename}. Use: .csv, .xlsx, .xls"
         )
     
-    # Validação de tamanho do arquivo (100MB padrão)
+    # File size validation (100MB default)
     max_size = 100 * 1024 * 1024  # 100MB
     content = await file.read()
     
     if len(content) > max_size:
         raise HTTPException(
             status_code=413,
-            detail=f"Arquivo muito grande: {len(content)/(1024*1024):.1f}MB. Máximo: {max_size/(1024*1024)}MB"
+            detail=f"File too large: {len(content)/(1024*1024):.1f}MB. Maximum: {max_size/(1024*1024)}MB"
         )
     
     if len(content) == 0:
-        raise HTTPException(status_code=400, detail="Arquivo está vazio")
+        raise HTTPException(status_code=400, detail="File is empty")
     
-    # Verificação de MIME type básica
+    # Basic MIME type verification
     import magic
     try:
         mime_type = magic.from_buffer(content, mime=True)
@@ -313,16 +313,16 @@ async def upload_file(file: UploadFile = File(...)):
         if file_ext in valid_mimes:
             expected_mimes = valid_mimes[file_ext]
             if mime_type not in expected_mimes and not mime_type.startswith('text/'):
-                logger.warning(f"MIME type suspeito: {mime_type} para arquivo {file.filename}")
+                logger.warning(f"Suspicious MIME type: {mime_type} for file {file.filename}")
     except Exception as e:
-        logger.warning(f"Não foi possível verificar MIME type: {e}")
+        logger.warning(f"Could not verify MIME type: {e}")
         mime_type = "unknown"
     
-    # Salvar arquivo com nome único
+    # Save file with unique name
     upload_dir = Path("uploads")
     upload_dir.mkdir(exist_ok=True)
     
-    # Gerar nome único mantendo extensão original
+    # Generate unique name keeping original extension
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     file_path = upload_dir / unique_filename
     
@@ -330,12 +330,12 @@ async def upload_file(file: UploadFile = File(...)):
         with open(file_path, "wb") as buffer:
             buffer.write(content)
         
-        # Validação inicial básica após salvar
+        # Basic initial validation after saving
         try:
             data_loader = DataLoader({})
             file_info = data_loader._verify_file_integrity(file_path)
             
-            # Tentar carregar amostra dos dados para validação prévia
+            # Try to load data sample for preliminary validation
             if file_ext == '.csv':
                 delimiter = data_loader._detect_csv_delimiter(file_path)
                 sample_df = pd.read_csv(file_path, delimiter=delimiter, nrows=5)
@@ -350,8 +350,8 @@ async def upload_file(file: UploadFile = File(...)):
             }
             
         except Exception as preview_error:
-            logger.warning(f"Erro na visualização prévia: {preview_error}")
-            preview_info = {"error": "Não foi possível gerar preview dos dados"}
+            logger.warning(f"Error in preview: {preview_error}")
+            preview_info = {"error": "Could not generate data preview"}
         
         return {
             "file_path": str(file_path),
@@ -365,10 +365,10 @@ async def upload_file(file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        # Limpar arquivo se houve erro no processamento
+        # Clean up file if processing error occurred
         if file_path.exists():
             file_path.unlink()
-        raise HTTPException(status_code=500, detail=f"Erro ao processar arquivo: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
 @app.post("/evaluations/{evaluation_id}/approve_step")
 async def approve_evaluation_step(evaluation_id: str, request: StepApprovalRequest):
@@ -383,7 +383,7 @@ async def approve_evaluation_step(evaluation_id: str, request: StepApprovalReque
         Status da aprovação
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     # Validar etapa
     valid_steps = ["transformations", "outliers", "model_selection"]
@@ -441,7 +441,7 @@ async def get_pending_approval(evaluation_id: str):
         Detalhes da etapa pendente
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     result_data = evaluation_results[evaluation_id]
     status = result_data["status"]
@@ -476,7 +476,7 @@ async def get_audit_trail(evaluation_id: str):
         Trilha de auditoria detalhada
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     try:
         # Gerar trilha de auditoria mockada mas realista
@@ -707,11 +707,11 @@ async def get_shap_explanations(evaluation_id: str, sample_size: int = 5):
         Explicações SHAP detalhadas
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     result = evaluation_results[evaluation_id]["result"]
     if result is None:
-        raise HTTPException(status_code=202, detail="Modelo ainda não treinado")
+        raise HTTPException(status_code=202, detail="Model not yet trained")
     
     # Verificar se é modo especialista
     request_config = evaluation_results[evaluation_id]["request"].config
@@ -766,11 +766,11 @@ async def simulate_shap_scenario(evaluation_id: str, request: ShapSimulationRequ
         Análise comparativa do cenário simulado
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     result = evaluation_results[evaluation_id]["result"]
     if result is None:
-        raise HTTPException(status_code=202, detail="Modelo ainda não treinado")
+        raise HTTPException(status_code=202, detail="Model not yet trained")
     
     # Verificar modo especialista
     request_config = evaluation_results[evaluation_id]["request"].config
@@ -906,11 +906,11 @@ async def get_shap_waterfall(evaluation_id: str, sample_index: int = 0):
         Dados estruturados para gráfico waterfall
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     result = evaluation_results[evaluation_id]["result"]
     if result is None:
-        raise HTTPException(status_code=202, detail="Modelo ainda não treinado")
+        raise HTTPException(status_code=202, detail="Model not yet trained")
     
     # Verificar modo especialista
     request_config = evaluation_results[evaluation_id]["request"].config
@@ -993,11 +993,11 @@ async def get_laboratory_features(evaluation_id: str):
         Metadados das features para interface interativa
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     result = evaluation_results[evaluation_id]["result"]
     if result is None:
-        raise HTTPException(status_code=202, detail="Modelo ainda não treinado")
+        raise HTTPException(status_code=202, detail="Model not yet trained")
     
     try:
         # Configuração das features para sliders e controles interativos
@@ -1239,7 +1239,7 @@ async def enrich_dataset_geospatial(evaluation_id: str, request: DataEnrichmentR
         Status do enriquecimento e estatísticas
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     try:
         # Configurar centro da cidade
@@ -1336,7 +1336,7 @@ async def get_geospatial_heatmap(evaluation_id: str):
         Dados estruturados para visualização em mapa de calor
     """
     if evaluation_id not in evaluation_results:
-        raise HTTPException(status_code=404, detail="Avaliação não encontrada")
+        raise HTTPException(status_code=404, detail="Evaluation not found")
     
     try:
         # Verificar se há dados enriquecidos

@@ -1,5 +1,5 @@
 """
-Gerenciador de WebSocket para feedback em tempo real do Celery
+WebSocket manager for real-time Celery feedback
 """
 
 import asyncio
@@ -17,7 +17,7 @@ from contextlib import suppress
 
 @dataclass
 class ProgressUpdate:
-    """Estrutura para atualizações de progresso."""
+    """Structure for progress updates."""
     evaluation_id: str
     status: str
     current_phase: str
