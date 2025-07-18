@@ -24,6 +24,7 @@ import warnings
 from scipy import stats
 from scipy.linalg import LinAlgError
 import time
+from .cache_system import ModelCache
 
 
 @dataclass
@@ -68,6 +69,16 @@ class ModelBuilder:
         if self.model_type in forbidden_methods:
             self.logger.warning(f"Método {self.model_type} rejeitado. Usando Elastic Net como padrão.")
             self.model_type = 'elastic_net'
+        
+        # Inicializar cache de modelos
+        self.cache_enabled = config.get('model_cache_enabled', True)
+        if self.cache_enabled:
+            cache_dir = config.get('model_cache_dir', 'model_cache')
+            max_models = config.get('max_cached_models', 50)
+            self.model_cache = ModelCache(cache_dir=cache_dir, max_models=max_models)
+            self.logger.info(f"Cache de modelos habilitado: {cache_dir}")
+        else:
+            self.model_cache = None
         
     def _validate_numerical_stability(self, X: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
         """
@@ -662,7 +673,7 @@ class ModelBuilder:
     
     def build_model(self, df: pd.DataFrame, target_col: str = 'valor') -> ModelResult:
         """
-        Constrói modelo completo.
+        Constrói modelo completo com cache inteligente.
         
         Args:
             df: DataFrame com dados
@@ -673,6 +684,38 @@ class ModelBuilder:
         """
         # Preparar dados
         X_train, X_test, y_train, y_test = self.prepare_data(df, target_col)
+        features_list = X_train.columns.tolist()
+        
+        # Verificar cache de modelos similares
+        cached_model = None
+        if self.cache_enabled and self.model_cache:
+            cached_model = self.model_cache.find_similar_model(
+                model_type=self.model_type,
+                features=features_list,
+                config=self.config,
+                similarity_threshold=0.95
+            )
+            
+            if cached_model:
+                self.logger.info(f"Modelo similar encontrado no cache: {cached_model.model_id}")
+                
+                # Carregar modelo do cache
+                cached_model_data = self.model_cache.load_model(cached_model.model_id)
+                if cached_model_data:
+                    self.logger.info("Reutilizando modelo do cache - economia de tempo significativa")
+                    
+                    # Reconstruir resultado do modelo
+                    return ModelResult(
+                        model=cached_model_data['model'],
+                        performance=cached_model_data['performance'],
+                        best_params=cached_model_data['best_params'],
+                        training_summary=cached_model_data['training_summary'],
+                        model_type=cached_model.model_type,
+                        explainer=cached_model_data.get('explainer')
+                    )
+        
+        # Treinar novo modelo se não houver cache
+        self.logger.info("Treinando novo modelo...")
         
         # Otimizar hiperparâmetros
         best_params = self.optimize_hyperparameters(X_train, y_train)
@@ -681,7 +724,7 @@ class ModelBuilder:
         model = self.train_model(X_train, y_train, best_params)
         
         # Avaliar modelo
-        performance = self.evaluate_model(X_train, X_test, y_test, X_train.columns.tolist())
+        performance = self.evaluate_model(X_train, X_test, y_test, features_list)
         
         # Resumo do treinamento
         training_summary = {
@@ -700,6 +743,41 @@ class ModelBuilder:
             model_type=self.model_type,
             explainer=self.explainer
         )
+        
+        # Salvar modelo no cache se performance for boa
+        if (self.cache_enabled and self.model_cache and 
+            performance.r2_score >= 0.6):  # Apenas modelos com R² >= 0.6
+            
+            try:
+                model_data = {
+                    'model': model,
+                    'performance': performance,
+                    'best_params': best_params,
+                    'training_summary': training_summary,
+                    'scaler': self.scaler,
+                    'explainer': self.explainer
+                }
+                
+                performance_metrics = {
+                    'r2_score': performance.r2_score,
+                    'rmse': performance.rmse,
+                    'mae': performance.mae,
+                    'mape': performance.mape
+                }
+                
+                model_id = self.model_cache.cache_model(
+                    model_data=model_data,
+                    model_type=self.model_type,
+                    features=features_list,
+                    config=self.config,
+                    performance_metrics=performance_metrics
+                )
+                
+                if model_id:
+                    self.logger.info(f"Modelo salvo no cache: {model_id}")
+                    
+            except Exception as e:
+                self.logger.warning(f"Erro ao salvar modelo no cache: {e}")
         
         # Log de conformidade com padrões
         self.logger.info(f"Modelo {self.model_type} construído com sucesso")

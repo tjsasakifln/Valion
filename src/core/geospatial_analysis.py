@@ -16,6 +16,8 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+from functools import lru_cache
+from .cache_system import GeospatialCache, MemoryCache, cache_geospatial_feature
 
 
 @dataclass
@@ -43,7 +45,7 @@ class LocationAnalysis:
 class GeospatialAnalyzer:
     """Analisador geoespacial para dados imobiliários."""
     
-    def __init__(self, city_center: Optional[Tuple[float, float]] = None, region: str = "Brazil"):
+    def __init__(self, city_center: Optional[Tuple[float, float]] = None, region: str = "Brazil", cache_enabled: bool = True):
         self.logger = logging.getLogger(__name__)
         self.region = region
         self.geocoder = Nominatim(user_agent="valion_geospatial")
@@ -54,7 +56,14 @@ class GeospatialAnalyzer:
         # Coordenadas do centro baseadas na região
         self.city_center = city_center or self.regional_config['default_city_center']
         
-        # Cache para geocodificação
+        # Sistema de cache inteligente
+        self.cache_enabled = cache_enabled
+        if cache_enabled:
+            self.cache = GeospatialCache(MemoryCache(max_size=500), ttl=3600)
+        else:
+            self.cache = None
+        
+        # Cache legado para compatibilidade
         self.geocode_cache = {}
         
         # POIs (Points of Interest) baseados na região
@@ -242,7 +251,7 @@ class GeospatialAnalyzer:
     
     def geocode_address(self, address: str) -> Optional[Tuple[float, float]]:
         """
-        Geocodifica um endereço para coordenadas com parâmetros regionais.
+        Geocodifica um endereço para coordenadas com parâmetros regionais e cache inteligente.
         
         Args:
             address: Endereço para geocodificar
@@ -250,6 +259,14 @@ class GeospatialAnalyzer:
         Returns:
             Tupla (latitude, longitude) ou None se falhou
         """
+        # Verificar cache inteligente primeiro
+        if self.cache_enabled and self.cache:
+            cached_coords = self.cache.get_coordinates(address)
+            if cached_coords:
+                self.logger.debug(f"Coordenadas obtidas do cache: {address} -> {cached_coords}")
+                return cached_coords
+        
+        # Fallback para cache legado
         if address in self.geocode_cache:
             return self.geocode_cache[address]
         
@@ -267,7 +284,12 @@ class GeospatialAnalyzer:
             location = self.geocoder.geocode(enhanced_address, **geocode_params)
             if location:
                 coords = (location.latitude, location.longitude)
+                
+                # Salvar em ambos os caches
                 self.geocode_cache[address] = coords
+                if self.cache_enabled and self.cache:
+                    self.cache.set_coordinates(address, coords)
+                
                 self.logger.info(f"Geocodificado ({self.region}): {address} -> {coords}")
                 return coords
             else:
@@ -297,6 +319,7 @@ class GeospatialAnalyzer:
             
         return enhanced_address
     
+    @lru_cache(maxsize=1000)
     def calculate_distance_to_center(self, coordinates: Tuple[float, float]) -> float:
         """
         Calcula distância até o centro da cidade.
@@ -309,6 +332,7 @@ class GeospatialAnalyzer:
         """
         return geodesic(coordinates, self.city_center).kilometers
     
+    @cache_geospatial_feature(ttl=3600)
     def calculate_proximity_score(self, coordinates: Tuple[float, float]) -> float:
         """
         Calcula score de proximidade baseado em POIs.
@@ -319,6 +343,12 @@ class GeospatialAnalyzer:
         Returns:
             Score de proximidade (0-10)
         """
+        # Verificar cache inteligente primeiro
+        if self.cache_enabled and self.cache:
+            cached_analysis = self.cache.get_poi_analysis(coordinates, radius=5.0)
+            if cached_analysis and 'proximity_score' in cached_analysis:
+                return cached_analysis['proximity_score']
+        
         total_score = 0.0
         weight_sum = 0.0
         
@@ -336,9 +366,16 @@ class GeospatialAnalyzer:
         # Normalizar para escala 0-10
         if weight_sum > 0:
             normalized_score = (total_score / weight_sum) * 10
-            return min(10.0, normalized_score)
+            proximity_score = min(10.0, normalized_score)
+        else:
+            proximity_score = 0.0
         
-        return 0.0
+        # Salvar no cache
+        if self.cache_enabled and self.cache:
+            analysis_data = {'proximity_score': proximity_score}
+            self.cache.set_poi_analysis(coordinates, radius=5.0, analysis=analysis_data)
+        
+        return proximity_score
     
     def calculate_density_score(self, coordinates: Tuple[float, float], 
                               properties_data: pd.DataFrame) -> float:

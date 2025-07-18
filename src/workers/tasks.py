@@ -549,7 +549,7 @@ def generate_report(self, evaluation_data: Dict[str, Any], output_format: str = 
     Gera relatório de avaliação.
     
     Args:
-        evaluation_data: Dados da avaliação
+        evaluation_data: Dados da avaliação'
         output_format: Formato do relatório (json, excel)
         
     Returns:

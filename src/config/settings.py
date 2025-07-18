@@ -142,6 +142,22 @@ class StorageSettings:
 
 
 @dataclass
+class CacheSettings:
+    """Configurações de cache."""
+    enabled: bool = True
+    backend: str = "memory"  # memory, redis
+    max_size: int = 1000
+    geospatial_ttl: int = 3600  # 1 hora
+    model_cache_enabled: bool = True
+    model_cache_dir: str = "model_cache"
+    max_cached_models: int = 50
+    model_cache_min_r2: float = 0.6
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 1  # Usar DB separado para cache
+
+
+@dataclass
 class SecuritySettings:
     """Configurações de segurança."""
     secret_key: str = "your-secret-key-here"
@@ -239,6 +255,21 @@ class Settings:
             temp_dir=os.getenv("TEMP_DIR", "temp"),
             logs_dir=os.getenv("LOGS_DIR", "logs"),
             cleanup_days=int(os.getenv("CLEANUP_DAYS", "7"))
+        )
+        
+        # Cache
+        self.cache = CacheSettings(
+            enabled=os.getenv("CACHE_ENABLED", "true").lower() == "true",
+            backend=os.getenv("CACHE_BACKEND", "memory"),
+            max_size=int(os.getenv("CACHE_MAX_SIZE", "1000")),
+            geospatial_ttl=int(os.getenv("CACHE_GEOSPATIAL_TTL", "3600")),
+            model_cache_enabled=os.getenv("MODEL_CACHE_ENABLED", "true").lower() == "true",
+            model_cache_dir=os.getenv("MODEL_CACHE_DIR", "model_cache"),
+            max_cached_models=int(os.getenv("MAX_CACHED_MODELS", "50")),
+            model_cache_min_r2=float(os.getenv("MODEL_CACHE_MIN_R2", "0.6")),
+            redis_host=os.getenv("CACHE_REDIS_HOST", "localhost"),
+            redis_port=int(os.getenv("CACHE_REDIS_PORT", "6379")),
+            redis_db=int(os.getenv("CACHE_REDIS_DB", "1"))
         )
         
         # Security
@@ -352,7 +383,31 @@ class Settings:
             'durbin_watson_lower': self.model.durbin_watson_lower,
             'durbin_watson_upper': self.model.durbin_watson_upper,
             'max_vif': self.model.max_vif,
-            'max_outliers_percent': self.model.max_outliers_percent
+            'max_outliers_percent': self.model.max_outliers_percent,
+            # Cache settings
+            'model_cache_enabled': self.cache.model_cache_enabled,
+            'model_cache_dir': self.cache.model_cache_dir,
+            'max_cached_models': self.cache.max_cached_models
+        }
+    
+    def get_cache_config(self) -> Dict[str, Any]:
+        """
+        Retorna configurações de cache em formato dict.
+        
+        Returns:
+            Configurações de cache
+        """
+        return {
+            'cache_backend': self.cache.backend,
+            'max_cache_size': self.cache.max_size,
+            'geospatial_ttl': self.cache.geospatial_ttl,
+            'model_cache_enabled': self.cache.model_cache_enabled,
+            'model_cache_dir': self.cache.model_cache_dir,
+            'max_cached_models': self.cache.max_cached_models,
+            'model_cache_min_r2': self.cache.model_cache_min_r2,
+            'redis_host': self.cache.redis_host,
+            'redis_port': self.cache.redis_port,
+            'redis_db': self.cache.redis_db
         }
     
     def get_validation_standard(self, preferred_standard: Optional[str] = None) -> str:
