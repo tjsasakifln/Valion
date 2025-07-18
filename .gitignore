@@ -65,6 +65,9 @@ venv.bak/
 # Rope
 .ropeproject
 
+# Claude AI Assistant
+.claude/
+
 # --- Frameworks and Tools ---
 # Jupyter Notebook
 .ipynb_checkpoints
