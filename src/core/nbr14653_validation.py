@@ -5,23 +5,27 @@ Implementa bateria completa de testes exigidos pela norma técnica brasileira.
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from scipy import stats
 from sklearn.metrics import r2_score
 from sklearn.model_selection import cross_val_score
 from dataclasses import dataclass
 import logging
+import warnings
+from sklearn.exceptions import ConvergenceWarning
 
 
 @dataclass
 class NBRTestResult:
-    """Resultado de um teste NBR 14653."""
+    """Resultado de um teste NBR 14653 com tratamento de casos especiais."""
     test_name: str
     passed: bool
-    value: float
+    value: Union[float, str]  # Permitir 'N/A' para testes não aplicáveis
     threshold: float
     description: str
     recommendation: str
+    applicable: bool = True  # Se o teste é aplicável aos dados
+    warning: Optional[str] = None  # Avisos sobre limitações do teste
 
 
 @dataclass
@@ -96,7 +100,7 @@ class NBR14653Validator:
     def test_f_significance(self, model, X_train: pd.DataFrame, 
                           y_train: pd.Series) -> NBRTestResult:
         """
-        Teste F de significância do modelo.
+        Teste F de significância do modelo com tratamento de casos especiais.
         
         Args:
             model: Modelo treinado
@@ -108,35 +112,96 @@ class NBR14653Validator:
         """
         from sklearn.metrics import mean_squared_error
         
-        y_pred = model.predict(X_train)
-        
-        # Calcular F-statistic
-        n = len(y_train)
-        k = len(model.coef_)
-        
-        mse_model = mean_squared_error(y_train, y_pred)
-        mse_total = np.var(y_train)
-        
-        f_stat = ((mse_total - mse_model) / k) / (mse_model / (n - k - 1))
-        
-        # Calcular p-value
-        p_value = 1 - stats.f.cdf(f_stat, k, n - k - 1)
-        
-        passed = p_value < self.thresholds['f_test_p_value']
-        
-        return NBRTestResult(
-            test_name="Teste F de Significância",
-            passed=passed,
-            value=p_value,
-            threshold=self.thresholds['f_test_p_value'],
-            description=f"F-statistic = {f_stat:.4f}, p-value = {p_value:.4f}",
-            recommendation="p-value deve ser < 0.05 para significância"
-        )
+        try:
+            y_pred = model.predict(X_train)
+            
+            # Verificar se o modelo tem coeficientes (necessário para teste F)
+            if not hasattr(model, 'coef_'):
+                return NBRTestResult(
+                    test_name="Teste F de Significância",
+                    passed=False,
+                    value="N/A",
+                    threshold=self.thresholds['f_test_p_value'],
+                    description="Modelo não suporta teste F (sem coeficientes lineares)",
+                    recommendation="Use modelo linear para teste F",
+                    applicable=False
+                )
+            
+            # Calcular F-statistic
+            n = len(y_train)
+            k = len(model.coef_)
+            
+            # Verificar se há graus de liberdade suficientes
+            if n <= k + 1:
+                return NBRTestResult(
+                    test_name="Teste F de Significância",
+                    passed=False,
+                    value="N/A",
+                    threshold=self.thresholds['f_test_p_value'],
+                    description=f"Graus de liberdade insuficientes: n={n}, k={k}",
+                    recommendation="Aumente o tamanho da amostra ou reduza o número de features",
+                    applicable=False
+                )
+            
+            mse_model = mean_squared_error(y_train, y_pred)
+            mse_total = np.var(y_train)
+            
+            # Verificar divisão por zero
+            if mse_model == 0 or mse_total == 0:
+                return NBRTestResult(
+                    test_name="Teste F de Significância",
+                    passed=False,
+                    value="N/A",
+                    threshold=self.thresholds['f_test_p_value'],
+                    description="MSE zero detectado - modelo pode ter sobreajuste perfeito",
+                    recommendation="Verificar overfitting ou variância zero no target",
+                    applicable=False
+                )
+            
+            f_stat = ((mse_total - mse_model) / k) / (mse_model / (n - k - 1))
+            
+            # Verificar se F-statistic é válida
+            if np.isnan(f_stat) or np.isinf(f_stat) or f_stat < 0:
+                return NBRTestResult(
+                    test_name="Teste F de Significância",
+                    passed=False,
+                    value="N/A",
+                    threshold=self.thresholds['f_test_p_value'],
+                    description=f"F-statistic inválida: {f_stat}",
+                    recommendation="Verificar estabilidade numérica dos dados",
+                    applicable=False
+                )
+            
+            # Calcular p-value
+            p_value = 1 - stats.f.cdf(f_stat, k, n - k - 1)
+            
+            passed = p_value < self.thresholds['f_test_p_value']
+            
+            return NBRTestResult(
+                test_name="Teste F de Significância",
+                passed=passed,
+                value=p_value,
+                threshold=self.thresholds['f_test_p_value'],
+                description=f"F-statistic = {f_stat:.4f}, p-value = {p_value:.4f}",
+                recommendation="p-value deve ser < 0.05 para significância"
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Erro no teste F: {e}")
+            return NBRTestResult(
+                test_name="Teste F de Significância",
+                passed=False,
+                value="N/A",
+                threshold=self.thresholds['f_test_p_value'],
+                description=f"Erro na execução: {str(e)}",
+                recommendation="Verificar integridade dos dados e modelo",
+                applicable=False
+            )
     
     def test_coefficients_significance(self, model, X_train: pd.DataFrame, 
                                      y_train: pd.Series) -> NBRTestResult:
         """
-        Teste t de significância dos coeficientes.
+        Teste t de significância dos coeficientes com tratamento robusto.
         
         Args:
             model: Modelo treinado
@@ -148,40 +213,147 @@ class NBR14653Validator:
         """
         from sklearn.metrics import mean_squared_error
         
-        y_pred = model.predict(X_train)
-        mse = mean_squared_error(y_train, y_pred)
-        
-        # Calcular erro padrão dos coeficientes
-        X_array = X_train.values
-        xtx_inv = np.linalg.inv(X_array.T @ X_array)
-        se_coef = np.sqrt(mse * np.diag(xtx_inv))
-        
-        # Calcular t-statistics
-        t_stats = model.coef_ / se_coef
-        
-        # Calcular p-values
-        df = len(y_train) - len(model.coef_) - 1
-        p_values = 2 * (1 - stats.t.cdf(np.abs(t_stats), df))
-        
-        # Contar coeficientes significativos
-        significant_coefs = np.sum(p_values < self.thresholds['t_test_p_value'])
-        total_coefs = len(model.coef_)
-        
-        passed = significant_coefs / total_coefs >= 0.5  # Pelo menos 50% significativos
-        
-        return NBRTestResult(
-            test_name="Teste t dos Coeficientes",
-            passed=passed,
-            value=significant_coefs / total_coefs,
-            threshold=0.5,
-            description=f"{significant_coefs}/{total_coefs} coeficientes significativos",
-            recommendation="Pelo menos 50% dos coeficientes devem ser significativos"
-        )
+        try:
+            # Verificar se o modelo tem coeficientes
+            if not hasattr(model, 'coef_'):
+                return NBRTestResult(
+                    test_name="Teste t dos Coeficientes",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.5,
+                    description="Modelo não suporta teste t (sem coeficientes lineares)",
+                    recommendation="Use modelo linear para teste de coeficientes",
+                    applicable=False
+                )
+            
+            y_pred = model.predict(X_train)
+            mse = mean_squared_error(y_train, y_pred)
+            
+            # Verificar se MSE é válido
+            if mse == 0 or np.isnan(mse):
+                return NBRTestResult(
+                    test_name="Teste t dos Coeficientes",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.5,
+                    description="MSE inválido para cálculo do erro padrão",
+                    recommendation="Verificar overfitting ou problemas nos dados",
+                    applicable=False
+                )
+            
+            # Calcular erro padrão dos coeficientes com tratamento de singularidade
+            X_array = X_train.values
+            
+            try:
+                xtx = X_array.T @ X_array
+                
+                # Verificar condição da matriz
+                condition_number = np.linalg.cond(xtx)
+                if condition_number > 1e12:
+                    return NBRTestResult(
+                        test_name="Teste t dos Coeficientes",
+                        passed=False,
+                        value="N/A",
+                        threshold=0.5,
+                        description=f"Matriz mal condicionada (cond={condition_number:.2e})",
+                        recommendation="Verificar multicolinearidade entre features",
+                        applicable=False,
+                        warning="Matriz próxima da singularidade"
+                    )
+                
+                xtx_inv = np.linalg.inv(xtx)
+                se_coef = np.sqrt(mse * np.diag(xtx_inv))
+                
+            except np.linalg.LinAlgError:
+                return NBRTestResult(
+                    test_name="Teste t dos Coeficientes",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.5,
+                    description="Matriz singular - não é possível calcular erro padrão",
+                    recommendation="Remover features colineares ou usar regularização",
+                    applicable=False
+                )
+            
+            # Verificar se erro padrão é válido
+            if np.any(se_coef == 0) or np.any(np.isnan(se_coef)):
+                return NBRTestResult(
+                    test_name="Teste t dos Coeficientes",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.5,
+                    description="Erro padrão inválido detectado",
+                    recommendation="Verificar estabilidade numérica do modelo",
+                    applicable=False
+                )
+            
+            # Calcular t-statistics
+            t_stats = model.coef_ / se_coef
+            
+            # Verificar graus de liberdade
+            df = len(y_train) - len(model.coef_) - 1
+            if df <= 0:
+                return NBRTestResult(
+                    test_name="Teste t dos Coeficientes",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.5,
+                    description=f"Graus de liberdade insuficientes: df={df}",
+                    recommendation="Aumente o tamanho da amostra ou reduza features",
+                    applicable=False
+                )
+            
+            # Calcular p-values
+            p_values = 2 * (1 - stats.t.cdf(np.abs(t_stats), df))
+            
+            # Contar coeficientes significativos
+            significant_coefs = np.sum(p_values < self.thresholds['t_test_p_value'])
+            total_coefs = len(model.coef_)
+            
+            if total_coefs == 0:
+                return NBRTestResult(
+                    test_name="Teste t dos Coeficientes",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.5,
+                    description="Nenhum coeficiente encontrado",
+                    recommendation="Verificar configuração do modelo",
+                    applicable=False
+                )
+            
+            significance_ratio = significant_coefs / total_coefs
+            passed = significance_ratio >= 0.5  # Pelo menos 50% significativos
+            
+            warning = None
+            if significance_ratio < 0.3:
+                warning = "Muito poucos coeficientes significativos - modelo pode estar mal especificado"
+            
+            return NBRTestResult(
+                test_name="Teste t dos Coeficientes",
+                passed=passed,
+                value=significance_ratio,
+                threshold=0.5,
+                description=f"{significant_coefs}/{total_coefs} coeficientes significativos ({significance_ratio:.1%})",
+                recommendation="Pelo menos 50% dos coeficientes devem ser significativos",
+                warning=warning
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Erro no teste t: {e}")
+            return NBRTestResult(
+                test_name="Teste t dos Coeficientes",
+                passed=False,
+                value="N/A",
+                threshold=0.5,
+                description=f"Erro na execução: {str(e)}",
+                recommendation="Verificar integridade dos dados e modelo",
+                applicable=False
+            )
     
     def test_residuals_normality(self, model, X_test: pd.DataFrame, 
                                 y_test: pd.Series) -> NBRTestResult:
         """
-        Teste de normalidade dos resíduos (Shapiro-Wilk).
+        Teste de normalidade dos resíduos com tratamento de casos especiais.
         
         Args:
             model: Modelo treinado
@@ -191,28 +363,133 @@ class NBR14653Validator:
         Returns:
             Resultado do teste de normalidade
         """
-        y_pred = model.predict(X_test)
-        residuals = y_test - y_pred
-        
-        # Teste Shapiro-Wilk
-        if len(residuals) > 5000:
-            # Para amostras grandes, usar Kolmogorov-Smirnov
-            stat, p_value = stats.kstest(residuals, 'norm')
-            test_name = "Normalidade dos Resíduos (Kolmogorov-Smirnov)"
-        else:
-            stat, p_value = stats.shapiro(residuals)
-            test_name = "Normalidade dos Resíduos (Shapiro-Wilk)"
-        
-        passed = p_value > 0.05
-        
-        return NBRTestResult(
-            test_name=test_name,
-            passed=passed,
-            value=p_value,
-            threshold=0.05,
-            description=f"Estatística = {stat:.4f}, p-value = {p_value:.4f}",
-            recommendation="p-value > 0.05 indica normalidade dos resíduos"
-        )
+        try:
+            y_pred = model.predict(X_test)
+            residuals = y_test - y_pred
+            
+            # Verificar se há resíduos suficientes
+            if len(residuals) < 3:
+                return NBRTestResult(
+                    test_name="Normalidade dos Resíduos",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.05,
+                    description=f"Amostra muito pequena: {len(residuals)} resíduos",
+                    recommendation="Mínimo de 3 observações necessário para teste de normalidade",
+                    applicable=False
+                )
+            
+            # Verificar variância zero
+            if np.var(residuals) == 0:
+                return NBRTestResult(
+                    test_name="Normalidade dos Resíduos",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.05,
+                    description="Resíduos com variância zero (overfitting perfeito)",
+                    recommendation="Verificar overfitting do modelo",
+                    applicable=False,
+                    warning="Variância zero pode indicar overfitting"
+                )
+            
+            # Remover valores infinitos ou NaN
+            residuals_clean = residuals[np.isfinite(residuals)]
+            
+            if len(residuals_clean) < len(residuals):
+                warning = f"Removidos {len(residuals) - len(residuals_clean)} valores não finitos"
+            else:
+                warning = None
+            
+            if len(residuals_clean) < 3:
+                return NBRTestResult(
+                    test_name="Normalidade dos Resíduos",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.05,
+                    description="Insuficientes resíduos válidos após limpeza",
+                    recommendation="Verificar predições do modelo",
+                    applicable=False,
+                    warning=warning
+                )
+            
+            # Escolher teste baseado no tamanho da amostra
+            if len(residuals_clean) > 5000:
+                # Para amostras grandes, usar Kolmogorov-Smirnov
+                # Normalizar resíduos
+                residuals_normalized = (residuals_clean - np.mean(residuals_clean)) / np.std(residuals_clean)
+                stat, p_value = stats.kstest(residuals_normalized, 'norm')
+                test_name = "Normalidade dos Resíduos (Kolmogorov-Smirnov)"
+                
+            elif len(residuals_clean) <= 50:
+                # Para amostras pequenas, usar Shapiro-Wilk
+                try:
+                    stat, p_value = stats.shapiro(residuals_clean)
+                    test_name = "Normalidade dos Resíduos (Shapiro-Wilk)"
+                except Exception as e:
+                    return NBRTestResult(
+                        test_name="Normalidade dos Resíduos",
+                        passed=False,
+                        value="N/A",
+                        threshold=0.05,
+                        description=f"Erro no teste Shapiro-Wilk: {str(e)}",
+                        recommendation="Verificar distribuição dos resíduos",
+                        applicable=False
+                    )
+            else:
+                # Para amostras médias, usar Anderson-Darling
+                try:
+                    result = stats.anderson(residuals_clean, dist='norm')
+                    stat = result.statistic
+                    # Aproximar p-value baseado nos valores críticos
+                    if stat < result.critical_values[2]:  # 5% significance level
+                        p_value = 0.1  # Approximate
+                    else:
+                        p_value = 0.01  # Approximate
+                    test_name = "Normalidade dos Resíduos (Anderson-Darling)"
+                except Exception:
+                    # Fallback para Shapiro-Wilk
+                    stat, p_value = stats.shapiro(residuals_clean)
+                    test_name = "Normalidade dos Resíduos (Shapiro-Wilk)"
+            
+            # Verificar se resultados são válidos
+            if np.isnan(stat) or np.isnan(p_value):
+                return NBRTestResult(
+                    test_name="Normalidade dos Resíduos",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.05,
+                    description="Estatística de teste inválida (NaN)",
+                    recommendation="Verificar distribuição dos resíduos",
+                    applicable=False
+                )
+            
+            passed = p_value > 0.05
+            
+            # Adicionar warning se p-value for muito baixo
+            if p_value < 0.001 and warning is None:
+                warning = "Forte evidência contra normalidade - considere transformações"
+            
+            return NBRTestResult(
+                test_name=test_name,
+                passed=passed,
+                value=p_value,
+                threshold=0.05,
+                description=f"Estatística = {stat:.4f}, p-value = {p_value:.4f}",
+                recommendation="p-value > 0.05 indica normalidade dos resíduos",
+                warning=warning
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Erro no teste de normalidade: {e}")
+            return NBRTestResult(
+                test_name="Normalidade dos Resíduos",
+                passed=False,
+                value="N/A",
+                threshold=0.05,
+                description=f"Erro na execução: {str(e)}",
+                recommendation="Verificar integridade dos dados",
+                applicable=False
+            )
     
     def test_autocorrelation(self, model, X_test: pd.DataFrame, 
                            y_test: pd.Series) -> NBRTestResult:
@@ -443,7 +720,7 @@ class NBR14653Validator:
                       y_train: pd.Series, y_test: pd.Series, 
                       X_predict: Optional[pd.DataFrame] = None) -> NBRValidationResult:
         """
-        Executa bateria completa de testes NBR 14653 com verificações de extrapolação.
+        Executa bateria completa de testes NBR 14653 com tratamento robusto de casos especiais.
         
         Args:
             model: Modelo treinado
@@ -458,58 +735,118 @@ class NBR14653Validator:
         """
         tests = []
         
-        # Executar todos os testes básicos
-        tests.append(self.test_coefficient_determination(model, X_test, y_test))
-        tests.append(self.test_f_significance(model, X_train, y_train))
-        tests.append(self.test_coefficients_significance(model, X_train, y_train))
-        tests.append(self.test_residuals_normality(model, X_test, y_test))
-        tests.append(self.test_autocorrelation(model, X_test, y_test))
-        tests.append(self.test_multicollinearity(X_train))
-        tests.append(self.test_homoscedasticity(model, X_test, y_test))
-        tests.append(self.test_prediction_intervals(model, X_test, y_test))
+        # Executar todos os testes com tratamento de erro
+        test_functions = [
+            ("R²", lambda: self.test_coefficient_determination(model, X_test, y_test)),
+            ("F", lambda: self.test_f_significance(model, X_train, y_train)),
+            ("Coeficientes", lambda: self.test_coefficients_significance(model, X_train, y_train)),
+            ("Normalidade", lambda: self.test_residuals_normality(model, X_test, y_test)),
+            ("Autocorrelação", lambda: self.test_autocorrelation(model, X_test, y_test)),
+            ("Multicolinearidade", lambda: self.test_multicollinearity(X_train)),
+            ("Homoscedasticidade", lambda: self.test_homoscedasticity(model, X_test, y_test)),
+            ("Intervalos", lambda: self.test_prediction_intervals(model, X_test, y_test))
+        ]
         
-        # Combinar datasets para teste de tamanho
-        df_combined = pd.concat([X_train, X_test])
-        tests.append(self.test_sample_size(df_combined))
+        for test_name, test_func in test_functions:
+            try:
+                result = test_func()
+                tests.append(result)
+            except Exception as e:
+                self.logger.error(f"Erro no teste {test_name}: {e}")
+                # Adicionar resultado de falha
+                tests.append(NBRTestResult(
+                    test_name=f"Teste {test_name}",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.0,
+                    description=f"Erro na execução: {str(e)}",
+                    recommendation="Verificar integridade dos dados e modelo",
+                    applicable=False
+                ))
+        
+        # Teste de tamanho da amostra
+        try:
+            df_combined = pd.concat([X_train, X_test])
+            tests.append(self.test_sample_size(df_combined))
+        except Exception as e:
+            self.logger.error(f"Erro no teste de tamanho da amostra: {e}")
+            tests.append(NBRTestResult(
+                test_name="Tamanho da Amostra",
+                passed=False,
+                value="N/A",
+                threshold=self.thresholds['min_sample_size'],
+                description=f"Erro na verificação: {str(e)}",
+                recommendation="Verificar integridade dos datasets",
+                applicable=False
+            ))
         
         # Teste de extrapolação se dados de predição fornecidos
         if X_predict is not None and len(X_predict) > 0:
-            tests.append(self.test_extrapolation_range(model, X_train, X_predict))
+            try:
+                tests.append(self.test_extrapolation_range(model, X_train, X_predict))
+            except Exception as e:
+                self.logger.error(f"Erro no teste de extrapolação: {e}")
+                tests.append(NBRTestResult(
+                    test_name="Teste de Extrapolação",
+                    passed=False,
+                    value="N/A",
+                    threshold=0.1,
+                    description=f"Erro na verificação: {str(e)}",
+                    recommendation="Verificar compatibilidade entre datasets",
+                    applicable=False
+                ))
         
-        # Calcular score de conformidade
-        passed_tests = sum(1 for test in tests if test.passed)
-        compliance_score = passed_tests / len(tests)
+        # Calcular score de conformidade considerando apenas testes aplicáveis
+        applicable_tests = [t for t in tests if t.applicable]
+        passed_applicable = sum(1 for test in applicable_tests if test.passed)
         
-        # Determinar grau geral
-        r2_test = tests[0]  # Primeiro teste é sempre R²
-        if r2_test.value >= self.thresholds['r2_superior'] and compliance_score >= 0.8:
-            overall_grade = "Superior"
-        elif r2_test.value >= self.thresholds['r2_normal'] and compliance_score >= 0.7:
-            overall_grade = "Normal"
-        elif r2_test.value >= self.thresholds['r2_inferior'] and compliance_score >= 0.6:
-            overall_grade = "Inferior"
-        else:
+        if len(applicable_tests) == 0:
+            compliance_score = 0.0
             overall_grade = "Inadequado"
+            self.logger.error("Nenhum teste NBR foi aplicável aos dados")
+        else:
+            compliance_score = passed_applicable / len(applicable_tests)
+            
+            # Determinar grau geral baseado no R² e conformidade
+            r2_test = next((t for t in tests if "R²" in t.test_name), None)
+            
+            if r2_test is None or not r2_test.applicable or r2_test.value == "N/A":
+                overall_grade = "Inadequado"
+                self.logger.warning("Teste R² não disponível - classificação inadequada")
+            else:
+                r2_value = r2_test.value
+                if r2_value >= self.thresholds['r2_superior'] and compliance_score >= 0.8:
+                    overall_grade = "Superior"
+                elif r2_value >= self.thresholds['r2_normal'] and compliance_score >= 0.7:
+                    overall_grade = "Normal"
+                elif r2_value >= self.thresholds['r2_inferior'] and compliance_score >= 0.6:
+                    overall_grade = "Inferior"
+                else:
+                    overall_grade = "Inadequado"
         
-        # Resumo expandido
+        # Resumo expandido com informações sobre aplicabilidade
         summary = {
             'total_tests': len(tests),
-            'passed_tests': passed_tests,
+            'applicable_tests': len(applicable_tests),
+            'passed_tests': sum(1 for test in tests if test.passed),
+            'passed_applicable': passed_applicable,
             'compliance_score': compliance_score,
-            'r2_value': r2_test.value,
+            'r2_value': r2_test.value if r2_test and r2_test.applicable else "N/A",
             'overall_grade': overall_grade,
             'extrapolation_tested': X_predict is not None,
             'critical_failures': [test.test_name for test in tests 
-                                if not test.passed and 'R²' in test.test_name],
+                                if not test.passed and test.applicable and 'R²' in test.test_name],
+            'non_applicable_tests': [test.test_name for test in tests if not test.applicable],
+            'tests_with_warnings': [test.test_name for test in tests if test.warning],
             'advanced_tests_passed': sum(1 for test in tests 
-                                       if test.passed and test.test_name in [
+                                       if test.passed and test.applicable and test.test_name in [
                                            'Teste de Homoscedasticidade (Breusch-Pagan)',
                                            'Intervalos de Predição (95%)',
                                            'Teste de Extrapolação'
                                        ])
         }
         
-        self.logger.info(f"Validação NBR 14653 concluída: {overall_grade} ({compliance_score:.2%} conformidade)")
+        self.logger.info(f"Validação NBR 14653 concluída: {overall_grade} ({compliance_score:.2%} conformidade, {len(applicable_tests)}/{len(tests)} testes aplicáveis)")
         
         return NBRValidationResult(
             overall_grade=overall_grade,

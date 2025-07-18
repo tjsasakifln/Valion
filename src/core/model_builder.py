@@ -5,19 +5,24 @@ Responsável por treinar o modelo de regressão com regularização.
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from sklearn.linear_model import ElasticNet, ElasticNetCV
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.inspection import permutation_importance
+from sklearn.exceptions import ConvergenceWarning
 import xgboost as xgb
 import shap
 from dataclasses import dataclass
 import logging
 import joblib
 from pathlib import Path
+import warnings
+from scipy import stats
+from scipy.linalg import LinAlgError
+import time
 
 
 @dataclass
@@ -63,10 +68,154 @@ class ModelBuilder:
             self.logger.warning(f"Método {self.model_type} rejeitado. Usando Elastic Net como padrão.")
             self.model_type = 'elastic_net'
         
+    def _validate_numerical_stability(self, X: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
+        """
+        Valida estabilidade numérica dos dados antes do treinamento.
+        
+        Args:
+            X: Features
+            y: Target
+            
+        Returns:
+            Dicionário com informações de validação
+        """
+        stability_info = {
+            'is_stable': True,
+            'issues': [],
+            'recommendations': []
+        }
+        
+        # Verificar multicolinearidade através de correlação
+        corr_matrix = X.corr()
+        high_corr_pairs = []
+        
+        for i in range(len(corr_matrix.columns)):
+            for j in range(i+1, len(corr_matrix.columns)):
+                corr_val = abs(corr_matrix.iloc[i, j])
+                if corr_val > 0.95:  # Correlação muito alta
+                    high_corr_pairs.append((
+                        corr_matrix.columns[i], 
+                        corr_matrix.columns[j], 
+                        corr_val
+                    ))
+        
+        if high_corr_pairs:
+            stability_info['issues'].append('multicolinearidade_detectada')
+            stability_info['high_correlations'] = high_corr_pairs
+            stability_info['recommendations'].append(
+                f"Remover uma das variáveis dos {len(high_corr_pairs)} pares altamente correlacionados"
+            )
+        
+        # Verificar variância das features
+        variances = X.var()
+        zero_var_features = variances[variances == 0].index.tolist()
+        low_var_features = variances[(variances > 0) & (variances < 1e-10)].index.tolist()
+        
+        if zero_var_features:
+            stability_info['issues'].append('features_variancia_zero')
+            stability_info['zero_variance_features'] = zero_var_features
+            stability_info['recommendations'].append(
+                f"Remover {len(zero_var_features)} features com variância zero"
+            )
+        
+        if low_var_features:
+            stability_info['issues'].append('features_variancia_baixa')
+            stability_info['low_variance_features'] = low_var_features
+            stability_info['recommendations'].append(
+                f"Considerar remoção de {len(low_var_features)} features com variância muito baixa"
+            )
+        
+        # Verificar outliers extremos que podem causar instabilidade
+        outlier_features = []
+        for col in X.select_dtypes(include=[np.number]).columns:
+            q1, q3 = X[col].quantile([0.25, 0.75])
+            iqr = q3 - q1
+            if iqr > 0:
+                extreme_outliers = ((X[col] < q1 - 3 * iqr) | (X[col] > q3 + 3 * iqr)).sum()
+                if extreme_outliers / len(X) > 0.05:  # Mais de 5% outliers extremos
+                    outlier_features.append((col, extreme_outliers))
+        
+        if outlier_features:
+            stability_info['issues'].append('outliers_extremos')
+            stability_info['extreme_outliers'] = outlier_features
+            stability_info['recommendations'].append(
+                "Considerar tratamento de outliers extremos para estabilidade numérica"
+            )
+        
+        # Verificar condição da matriz de correlação (aproximação do número de condição)
+        try:
+            eigenvals = np.linalg.eigvals(corr_matrix.fillna(0).values)
+            condition_number = max(eigenvals) / min(eigenvals) if min(eigenvals) > 1e-10 else np.inf
+            
+            if condition_number > 1e12:
+                stability_info['issues'].append('matriz_mal_condicionada')
+                stability_info['condition_number'] = float(condition_number)
+                stability_info['recommendations'].append(
+                    "Matriz de correlação mal condicionada - considerar regularização mais forte"
+                )
+                stability_info['is_stable'] = False
+        except Exception as e:
+            self.logger.warning(f"Erro ao calcular número de condição: {e}")
+        
+        return stability_info
+    
+    def _apply_numerical_fixes(self, X: pd.DataFrame, y: pd.Series, 
+                              stability_info: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        Aplica correções automáticas para problemas de estabilidade numérica.
+        
+        Args:
+            X: Features
+            y: Target
+            stability_info: Informações de validação
+            
+        Returns:
+            X e y corrigidos
+        """
+        X_fixed = X.copy()
+        y_fixed = y.copy()
+        
+        # Remover features com variância zero
+        if 'zero_variance_features' in stability_info:
+            features_to_remove = stability_info['zero_variance_features']
+            X_fixed = X_fixed.drop(columns=features_to_remove)
+            self.logger.info(f"Removidas {len(features_to_remove)} features com variância zero")
+        
+        # Tratar multicolinearidade removendo uma das variáveis correlacionadas
+        if 'high_correlations' in stability_info:
+            features_to_remove = set()
+            for feat1, feat2, corr in stability_info['high_correlations']:
+                # Remover a feature com menor correlação com o target
+                if feat1 in X_fixed.columns and feat2 in X_fixed.columns:
+                    corr_target1 = abs(X_fixed[feat1].corr(y_fixed))
+                    corr_target2 = abs(X_fixed[feat2].corr(y_fixed))
+                    
+                    if corr_target1 < corr_target2:
+                        features_to_remove.add(feat1)
+                    else:
+                        features_to_remove.add(feat2)
+            
+            if features_to_remove:
+                X_fixed = X_fixed.drop(columns=list(features_to_remove))
+                self.logger.info(f"Removidas {len(features_to_remove)} features por multicolinearidade")
+        
+        # Aplicar winsorização para outliers extremos
+        if 'extreme_outliers' in stability_info:
+            for col, outlier_count in stability_info['extreme_outliers']:
+                if col in X_fixed.columns:
+                    # Winsorizar nos percentis 1% e 99%
+                    lower_bound = X_fixed[col].quantile(0.01)
+                    upper_bound = X_fixed[col].quantile(0.99)
+                    
+                    X_fixed[col] = X_fixed[col].clip(lower=lower_bound, upper=upper_bound)
+                    self.logger.info(f"Aplicada winsorização na feature '{col}'")
+        
+        return X_fixed, y_fixed
+    
     def prepare_data(self, df: pd.DataFrame, target_col: str = 'valor', 
                     test_size: float = 0.2) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
         """
-        Prepara dados para treinamento.
+        Prepara dados para treinamento com validações de estabilidade numérica.
         
         Args:
             df: DataFrame com dados
@@ -79,25 +228,56 @@ class ModelBuilder:
         X = df.drop(columns=[target_col])
         y = df[target_col]
         
+        # Validar estabilidade numérica
+        stability_info = self._validate_numerical_stability(X, y)
+        
+        if not stability_info['is_stable']:
+            self.logger.warning("Problemas de estabilidade numérica detectados. Aplicando correções automáticas.")
+            for issue in stability_info['issues']:
+                self.logger.warning(f"Problema detectado: {issue}")
+            
+            # Aplicar correções
+            X, y = self._apply_numerical_fixes(X, y, stability_info)
+        
+        # Verificar se ainda temos features suficientes
+        if len(X.columns) < 2:
+            raise ValueError("Dados insuficientes após correções de estabilidade numérica")
+        
         # Dividir dados
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=42
+            X, y, test_size=test_size, random_state=42, stratify=None
         )
         
-        # Escalar features
-        X_train_scaled = pd.DataFrame(
-            self.scaler.fit_transform(X_train),
-            columns=X_train.columns,
-            index=X_train.index
-        )
+        # Escolher scaler baseado na presença de outliers
+        if 'extreme_outliers' in stability_info:
+            self.scaler = RobustScaler()  # Mais robusto a outliers
+            self.logger.info("Usando RobustScaler devido à presença de outliers")
+        else:
+            self.scaler = StandardScaler()
         
-        X_test_scaled = pd.DataFrame(
-            self.scaler.transform(X_test),
-            columns=X_test.columns,
-            index=X_test.index
-        )
+        # Escalar features com tratamento de erro
+        try:
+            X_train_scaled = pd.DataFrame(
+                self.scaler.fit_transform(X_train),
+                columns=X_train.columns,
+                index=X_train.index
+            )
+            
+            X_test_scaled = pd.DataFrame(
+                self.scaler.transform(X_test),
+                columns=X_test.columns,
+                index=X_test.index
+            )
+        except Exception as e:
+            self.logger.error(f"Erro na padronização: {e}")
+            raise ValueError(f"Falha na padronização dos dados: {e}")
         
-        self.logger.info(f"Dados preparados - Treino: {len(X_train)}, Teste: {len(X_test)}")
+        # Verificação final de sanidade
+        if X_train_scaled.isnull().any().any():
+            self.logger.error("Valores nulos detectados após padronização")
+            raise ValueError("Dados inválidos após padronização")
+        
+        self.logger.info(f"Dados preparados com estabilidade - Treino: {len(X_train)}, Teste: {len(X_test)}")
         return X_train_scaled, X_test_scaled, y_train, y_test
     
     def optimize_hyperparameters(self, X_train: pd.DataFrame, y_train: pd.Series) -> Dict[str, Any]:
@@ -164,7 +344,7 @@ class ModelBuilder:
     def train_model(self, X_train: pd.DataFrame, y_train: pd.Series, 
                    hyperparams: Optional[Dict[str, Any]] = None) -> Any:
         """
-        Treina o modelo selecionado.
+        Treina o modelo selecionado com proteções contra instabilidade numérica.
         
         Args:
             X_train: Features de treino
@@ -177,43 +357,106 @@ class ModelBuilder:
         if hyperparams is None:
             hyperparams = self.optimize_hyperparameters(X_train, y_train)
         
-        # Treinar modelo conforme o tipo
-        if self.model_type == 'elastic_net':
-            self.model = ElasticNet(
-                alpha=hyperparams['alpha'],
-                l1_ratio=hyperparams['l1_ratio'],
-                random_state=42,
-                max_iter=1000
-            )
-        elif self.model_type == 'xgboost':
-            self.model = xgb.XGBRegressor(
-                n_estimators=hyperparams['n_estimators'],
-                max_depth=hyperparams['max_depth'],
-                learning_rate=hyperparams['learning_rate'],
-                subsample=hyperparams['subsample'],
-                random_state=42
-            )
-        elif self.model_type == 'gradient_boosting':
-            self.model = GradientBoostingRegressor(
-                n_estimators=hyperparams['n_estimators'],
-                max_depth=hyperparams['max_depth'],
-                learning_rate=hyperparams['learning_rate'],
-                subsample=hyperparams['subsample'],
-                random_state=42
-            )
-        elif self.model_type == 'random_forest':
-            self.model = RandomForestRegressor(
-                n_estimators=hyperparams['n_estimators'],
-                max_depth=hyperparams['max_depth'],
-                min_samples_split=hyperparams['min_samples_split'],
-                min_samples_leaf=hyperparams['min_samples_leaf'],
-                random_state=42
-            )
+        # Treinar modelo conforme o tipo com tratamento robusto de erros
+        max_attempts = 3
         
-        self.model.fit(X_train, y_train)
-        
-        self.logger.info(f"Modelo {self.model_type} treinado com sucesso")
-        return self.model
+        for attempt in range(max_attempts):
+            try:
+                if self.model_type == 'elastic_net':
+                    # Aumentar max_iter progressivamente se houver problemas de convergência
+                    max_iter = 1000 * (2 ** attempt)
+                    
+                    self.model = ElasticNet(
+                        alpha=hyperparams['alpha'],
+                        l1_ratio=hyperparams['l1_ratio'],
+                        random_state=42,
+                        max_iter=max_iter,
+                        tol=1e-4,
+                        selection='random'  # Mais robusto que 'cyclic'
+                    )
+                    
+                elif self.model_type == 'xgboost':
+                    self.model = xgb.XGBRegressor(
+                        n_estimators=hyperparams['n_estimators'],
+                        max_depth=hyperparams['max_depth'],
+                        learning_rate=hyperparams['learning_rate'],
+                        subsample=hyperparams['subsample'],
+                        random_state=42,
+                        reg_alpha=0.1,  # Regularização L1 para estabilidade
+                        reg_lambda=0.1,  # Regularização L2 para estabilidade
+                        n_jobs=1  # Evitar problemas de concorrência
+                    )
+                    
+                elif self.model_type == 'gradient_boosting':
+                    self.model = GradientBoostingRegressor(
+                        n_estimators=hyperparams['n_estimators'],
+                        max_depth=hyperparams['max_depth'],
+                        learning_rate=hyperparams['learning_rate'],
+                        subsample=hyperparams['subsample'],
+                        random_state=42,
+                        validation_fraction=0.1,  # Early stopping
+                        n_iter_no_change=10
+                    )
+                    
+                elif self.model_type == 'random_forest':
+                    self.model = RandomForestRegressor(
+                        n_estimators=hyperparams['n_estimators'],
+                        max_depth=hyperparams['max_depth'],
+                        min_samples_split=hyperparams['min_samples_split'],
+                        min_samples_leaf=hyperparams['min_samples_leaf'],
+                        random_state=42,
+                        n_jobs=1  # Evitar problemas de concorrência
+                    )
+                
+                # Capturar warnings de convergência
+                with warnings.catch_warnings(record=True) as w:
+                    warnings.simplefilter("always")
+                    
+                    start_time = time.time()
+                    self.model.fit(X_train, y_train)
+                    training_time = time.time() - start_time
+                    
+                    # Verificar warnings de convergência
+                    convergence_warnings = [warning for warning in w 
+                                           if issubclass(warning.category, ConvergenceWarning)]
+                    
+                    if convergence_warnings and attempt < max_attempts - 1:
+                        self.logger.warning(f"Aviso de convergência na tentativa {attempt + 1}. Tentando novamente...")
+                        continue
+                    
+                    if convergence_warnings:
+                        self.logger.warning("Modelo treinado com avisos de convergência - considere ajustar hiperparâmetros")
+                
+                # Verificar se o modelo foi treinado corretamente
+                if hasattr(self.model, 'coef_') and np.any(np.isnan(self.model.coef_)):
+                    raise ValueError("Coeficientes NaN detectados no modelo")
+                
+                if hasattr(self.model, 'feature_importances_') and np.any(np.isnan(self.model.feature_importances_)):
+                    raise ValueError("Feature importances NaN detectadas")
+                
+                self.logger.info(f"Modelo {self.model_type} treinado com sucesso em {training_time:.2f}s (tentativa {attempt + 1})")
+                return self.model
+                
+            except (ConvergenceWarning, LinAlgError, ValueError) as e:
+                if attempt < max_attempts - 1:
+                    self.logger.warning(f"Erro no treinamento (tentativa {attempt + 1}): {e}. Tentando novamente...")
+                    
+                    # Ajustar hiperparâmetros para maior estabilidade
+                    if self.model_type == 'elastic_net':
+                        # Aumentar regularização
+                        hyperparams['alpha'] = min(hyperparams['alpha'] * 2, 10.0)
+                    elif self.model_type in ['xgboost', 'gradient_boosting']:
+                        # Reduzir learning rate
+                        hyperparams['learning_rate'] = max(hyperparams['learning_rate'] * 0.5, 0.01)
+                    
+                    continue
+                else:
+                    self.logger.error(f"Falha no treinamento após {max_attempts} tentativas: {e}")
+                    raise ValueError(f"Não foi possível treinar o modelo estável: {e}")
+            
+            except Exception as e:
+                self.logger.error(f"Erro inesperado no treinamento: {e}")
+                raise
     
     def evaluate_model(self, X_train: pd.DataFrame, X_test: pd.DataFrame, 
                       y_test: pd.Series, feature_names: List[str]) -> ModelPerformance:
@@ -297,32 +540,89 @@ class ModelBuilder:
     
     def _calculate_shap_values(self, X_train: pd.DataFrame, X_test: pd.DataFrame) -> Tuple[np.ndarray, Dict[str, float]]:
         """
-        Calcula SHAP values para interpretabilidade do modelo.
+        Calcula SHAP values para interpretabilidade do modelo com fallbacks robustos.
         OBRIGATÓRIO no modo especialista para manter filosofia "glass-box".
         """
+        shap_values = None
+        shap_feature_importance = None
+        
         # Usar amostra menor para evitar problemas de memória
         sample_size = min(100, len(X_train))
         X_train_sample = X_train.sample(n=sample_size, random_state=42)
         
+        # Lista de explainers para tentar (ordem de preferência)
+        explainer_attempts = []
+        
         if self.model_type == 'elastic_net':
-            # Para modelos lineares
-            self.explainer = shap.LinearExplainer(self.model, X_train_sample)
+            explainer_attempts = [
+                ('LinearExplainer', lambda: shap.LinearExplainer(self.model, X_train_sample)),
+                ('KernelExplainer', lambda: shap.KernelExplainer(self.model.predict, X_train_sample))
+            ]
         else:
-            # Para modelos baseados em árvore
-            self.explainer = shap.TreeExplainer(self.model)
+            explainer_attempts = [
+                ('TreeExplainer', lambda: shap.TreeExplainer(self.model)),
+                ('KernelExplainer', lambda: shap.KernelExplainer(self.model.predict, X_train_sample))
+            ]
         
-        # Calcular SHAP values
-        sample_size = min(50, len(X_test))
-        shap_values = self.explainer.shap_values(X_test.iloc[:sample_size])
-        self.logger.info(f"SHAP values calculados para {sample_size} amostras no modo especialista")
-        
-        # Calcular importância média das features
-        if shap_values.ndim == 2:
-            shap_importance = np.abs(shap_values).mean(axis=0)
-        else:
-            shap_importance = np.abs(shap_values).mean()
-        
-        shap_feature_importance = dict(zip(X_test.columns, shap_importance))
+        # Tentar cada explainer até um funcionar
+        for explainer_name, explainer_func in explainer_attempts:
+            try:
+                self.logger.info(f"Tentando {explainer_name} para SHAP...")
+                self.explainer = explainer_func()
+                
+                # Calcular SHAP values
+                sample_size = min(50, len(X_test))
+                X_test_sample = X_test.iloc[:sample_size]
+                
+                # Timeout para evitar travamento
+                start_time = time.time()
+                
+                if explainer_name == 'KernelExplainer':
+                    # KernelExplainer é mais lento, usar amostra menor
+                    sample_size = min(20, sample_size)
+                    X_test_sample = X_test.iloc[:sample_size]
+                
+                shap_values = self.explainer.shap_values(X_test_sample)
+                calculation_time = time.time() - start_time
+                
+                if calculation_time > 300:  # 5 minutos
+                    self.logger.warning(f"SHAP calculation took {calculation_time:.1f}s - consider optimization")
+                
+                # Verificar se os valores são válidos
+                if np.any(np.isnan(shap_values)) or np.any(np.isinf(shap_values)):
+                    raise ValueError("SHAP values contêm NaN ou Inf")
+                
+                # Calcular importância média das features
+                if shap_values.ndim == 2:
+                    shap_importance = np.abs(shap_values).mean(axis=0)
+                else:
+                    shap_importance = np.abs(shap_values).mean()
+                
+                # Verificar se a importância é válida
+                if np.any(np.isnan(shap_importance)) or np.any(np.isinf(shap_importance)):
+                    raise ValueError("SHAP importance contém NaN ou Inf")
+                
+                shap_feature_importance = dict(zip(X_test_sample.columns, shap_importance))
+                
+                self.logger.info(f"SHAP values calculados com sucesso usando {explainer_name} para {sample_size} amostras")
+                break
+                
+            except Exception as e:
+                self.logger.warning(f"Falha com {explainer_name}: {e}")
+                if explainer_name == explainer_attempts[-1][0]:  # Último explainer
+                    # Se todos os explainers falharam, calcular importância básica
+                    self.logger.error("Todos os explainers SHAP falharam. Usando importância de features como fallback.")
+                    
+                    if self.expert_mode:
+                        raise ValueError(f"SHAP obrigatório no modo especialista falhou com todos os métodos: {e}")
+                    
+                    # Fallback: usar feature importance do modelo
+                    feature_importance = self._get_feature_importance(X_test.columns.tolist())
+                    shap_feature_importance = feature_importance
+                    shap_values = np.zeros((min(50, len(X_test)), len(X_test.columns)))
+                    
+                    self.logger.warning("Usando feature importance como substituto para SHAP")
+                continue
         
         return shap_values, shap_feature_importance
     

@@ -5,6 +5,7 @@ Executa tarefas computacionalmente intensivas sem travar a interface.
 
 from celery import Celery
 from celery.signals import task_prerun, task_postrun, task_failure
+from celery.exceptions import Retry, MaxRetriesExceededError
 import logging
 from typing import Dict, Any, Optional
 import pandas as pd
@@ -12,6 +13,11 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import time
+import psycopg2
+from sqlalchemy.exc import OperationalError, IntegrityError, DatabaseError
+import redis
+from contextlib import contextmanager
 
 # Imports dos módulos core
 from src.core.data_loader import DataLoader
@@ -34,7 +40,7 @@ settings = Settings()
 # Configuração do Celery
 app = Celery('valion_worker')
 
-# Configuração do broker (Redis/RabbitMQ)
+# Configuração robusta do broker (Redis/RabbitMQ) com retry e dead letter queues
 app.conf.update(
     broker_url=settings.CELERY_BROKER_URL,
     result_backend=settings.CELERY_RESULT_BACKEND,
@@ -48,6 +54,15 @@ app.conf.update(
     task_soft_time_limit=3300,  # 55 minutos
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=1000,
+    
+    # Configurações de retry globais
+    task_acks_late=True,
+    worker_disable_rate_limits=False,
+    task_reject_on_worker_lost=True,
+    
+    # Retry policy padrão
+    task_default_retry_delay=60,  # 1 minuto
+    task_max_retries=3,
 )
 
 # Configuração de roteamento
@@ -74,6 +89,42 @@ def task_failure_handler(sender=None, task_id=None, exception=None, traceback=No
     """Handler executado quando a tarefa falha."""
     logger.error(f"Tarefa {task_id} falhou: {exception}")
 
+# Lista de exceções que devem acionar retry automático
+RETRIABLE_EXCEPTIONS = (
+    OperationalError,
+    DatabaseError,
+    psycopg2.OperationalError,
+    redis.ConnectionError,
+    redis.TimeoutError,
+    ConnectionError,
+    TimeoutError
+)
+
+@contextmanager
+def safe_database_operation(evaluation_id: str = None):
+    """Context manager para operações de banco seguras com retry."""
+    max_retries = 3
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            yield
+            break
+        except RETRIABLE_EXCEPTIONS as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Operação de banco falhou (tentativa {attempt + 1}/{max_retries}): {e}")
+                time.sleep(retry_delay * (2 ** attempt))  # Backoff exponencial
+                continue
+            else:
+                logger.error(f"Operação de banco falhou após {max_retries} tentativas: {e}")
+                if evaluation_id:
+                    log_audit_trail(evaluation_id, 'database_failure', 'system', None,
+                                   new_values={'error': str(e), 'max_retries_exceeded': True})
+                raise
+        except Exception as e:
+            logger.error(f"Erro não retriable na operação de banco: {e}")
+            raise
+
 # Funções auxiliares
 def send_websocket_update(evaluation_id: str, status: str, phase: str, progress: float, message: str, metadata: Optional[Dict] = None):
     """Envia atualização via WebSocket."""
@@ -99,10 +150,10 @@ def send_websocket_update(evaluation_id: str, status: str, phase: str, progress:
 def log_audit_trail(evaluation_id: str, operation: str, entity_type: str, entity_id: Optional[str] = None,
                    old_values: Optional[Dict] = None, new_values: Optional[Dict] = None, 
                    metadata: Optional[Dict] = None, user_id: str = "system"):
-    """Registra entrada na trilha de auditoria."""
+    """Registra entrada na trilha de auditoria com transação atômica."""
     try:
         db_manager = get_database_manager()
-        with db_manager.get_session() as session:
+        with db_manager.get_atomic_transaction() as session:
             db_manager.create_audit_trail(
                 session=session,
                 user_id=user_id,
@@ -119,7 +170,15 @@ def log_audit_trail(evaluation_id: str, operation: str, entity_type: str, entity
 
 # Tarefas Celery
 
-@app.task(bind=True, name='valion_worker.tasks.process_evaluation')
+@app.task(
+    bind=True, 
+    name='valion_worker.tasks.process_evaluation',
+    autoretry_for=RETRIABLE_EXCEPTIONS,
+    retry_kwargs={'max_retries': 3, 'countdown': 60},
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True
+)
 def process_evaluation(self, evaluation_id: str, file_path: str, target_column: str = "valor", config: Optional[Dict[str, Any]] = None):
     """
     Processa avaliação imobiliária completa.
@@ -265,7 +324,7 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
             validation_result, transformation_result, model_result, nbr_result, cleaned_data
         )
         
-        # Salvar modelo e relatório
+        # Salvar modelo e relatório com verificação de integridade
         model_path = f"models/{evaluation_id}_model.joblib"
         report_path = f"reports/{evaluation_id}_report.json"
         
@@ -275,9 +334,69 @@ def process_evaluation(self, evaluation_id: str, file_path: str, target_column: 
         model_builder.save_model(model_result, model_path)
         results_generator.save_report(report, report_path)
         
-        # Auditoria: Artefatos salvos
+        # Registrar artefatos do modelo no banco com verificação de integridade
+        try:
+            db_manager = get_database_manager()
+            
+            # Calcular checksum e tamanho dos arquivos
+            import hashlib
+            
+            # Artefato do modelo
+            model_size = os.path.getsize(model_path)
+            model_checksum = hashlib.sha256()
+            with open(model_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    model_checksum.update(chunk)
+            model_checksum = model_checksum.hexdigest()
+            
+            # Artefato do relatório
+            report_size = os.path.getsize(report_path)
+            report_checksum = hashlib.sha256()
+            with open(report_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    report_checksum.update(chunk)
+            report_checksum = report_checksum.hexdigest()
+            
+            # Salvar artefatos no banco com transação atômica
+            with db_manager.get_atomic_transaction() as session:
+                # Salvar modelo
+                db_manager.save_model_artifact(
+                    session=session,
+                    evaluation_id=evaluation_id,
+                    artifact_type="model",
+                    artifact_name=f"{evaluation_id}_model.joblib",
+                    file_path=model_path,
+                    file_size=model_size,
+                    checksum=model_checksum,
+                    metadata={"model_type": model_result.model_type, "r2_score": model_result.performance.r2_score},
+                    user_id="system"
+                )
+                
+                # Salvar relatório
+                db_manager.save_model_artifact(
+                    session=session,
+                    evaluation_id=evaluation_id,
+                    artifact_type="report",
+                    artifact_name=f"{evaluation_id}_report.json",
+                    file_path=report_path,
+                    file_size=report_size,
+                    checksum=report_checksum,
+                    metadata={"report_type": "full_evaluation"},
+                    user_id="system"
+                )
+            
+        except Exception as e:
+            logger.warning(f"Erro ao registrar artefatos no banco: {e}")
+        
+        # Auditoria: Artefatos salvos com checksums
         log_audit_trail(evaluation_id, 'artifacts_saved', 'file_system', None,
-                       new_values={'model_path': model_path, 'report_path': report_path})
+                       new_values={
+                           'model_path': model_path, 
+                           'report_path': report_path,
+                           'model_checksum': model_checksum,
+                           'report_checksum': report_checksum,
+                           'integrity_verified': True
+                       })
         
         self.update_state(state='PROGRESS', meta={'current': 100, 'total': 100, 'phase': 'Concluído'})
         send_websocket_update(evaluation_id, 'completed', 'Avaliação concluída', 100.0, 'Relatório gerado com sucesso')

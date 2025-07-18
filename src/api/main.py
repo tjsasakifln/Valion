@@ -19,6 +19,7 @@ import os
 
 # Imports dos módulos core
 from src.core.data_loader import DataLoader, DataValidationResult
+import magic
 from src.core.transformations import VariableTransformer, TransformationResult
 from src.core.model_builder import ModelBuilder, ModelResult
 from src.core.nbr14653_validation import NBR14653Validator, NBRValidationResult
@@ -270,28 +271,104 @@ async def make_prediction(evaluation_id: str, request: PredictionRequest):
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
-    Faz upload de arquivo de dados.
+    Faz upload de arquivo de dados com validações robustas.
     
     Args:
         file: Arquivo a ser enviado
         
     Returns:
-        Caminho do arquivo salvo
+        Caminho do arquivo salvo e informações de validação
     """
+    # Validação de extensão
     if not file.filename.endswith(('.csv', '.xlsx', '.xls')):
-        raise HTTPException(status_code=400, detail="Formato de arquivo não suportado")
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Formato de arquivo não suportado: {file.filename}. Use: .csv, .xlsx, .xls"
+        )
     
-    # Salvar arquivo
+    # Validação de tamanho do arquivo (100MB padrão)
+    max_size = 100 * 1024 * 1024  # 100MB
+    content = await file.read()
+    
+    if len(content) > max_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Arquivo muito grande: {len(content)/(1024*1024):.1f}MB. Máximo: {max_size/(1024*1024)}MB"
+        )
+    
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="Arquivo está vazio")
+    
+    # Verificação de MIME type básica
+    import magic
+    try:
+        mime_type = magic.from_buffer(content, mime=True)
+        valid_mimes = {
+            '.csv': ['text/csv', 'text/plain', 'application/csv'],
+            '.xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+            '.xls': ['application/vnd.ms-excel', 'application/x-ole-storage']
+        }
+        
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext in valid_mimes:
+            expected_mimes = valid_mimes[file_ext]
+            if mime_type not in expected_mimes and not mime_type.startswith('text/'):
+                logger.warning(f"MIME type suspeito: {mime_type} para arquivo {file.filename}")
+    except Exception as e:
+        logger.warning(f"Não foi possível verificar MIME type: {e}")
+        mime_type = "unknown"
+    
+    # Salvar arquivo com nome único
     upload_dir = Path("uploads")
     upload_dir.mkdir(exist_ok=True)
     
-    file_path = upload_dir / f"{uuid.uuid4()}_{file.filename}"
+    # Gerar nome único mantendo extensão original
+    unique_filename = f"{uuid.uuid4()}_{file.filename}"
+    file_path = upload_dir / unique_filename
     
-    with open(file_path, "wb") as buffer:
-        content = await file.read()
-        buffer.write(content)
-    
-    return {"file_path": str(file_path), "filename": file.filename}
+    try:
+        with open(file_path, "wb") as buffer:
+            buffer.write(content)
+        
+        # Validação inicial básica após salvar
+        try:
+            data_loader = DataLoader({})
+            file_info = data_loader._verify_file_integrity(file_path)
+            
+            # Tentar carregar amostra dos dados para validação prévia
+            if file_ext == '.csv':
+                delimiter = data_loader._detect_csv_delimiter(file_path)
+                sample_df = pd.read_csv(file_path, delimiter=delimiter, nrows=5)
+            else:
+                sample_df = pd.read_excel(file_path, nrows=5)
+            
+            preview_info = {
+                "columns": list(sample_df.columns),
+                "sample_rows": len(sample_df),
+                "total_columns": len(sample_df.columns),
+                "detected_delimiter": delimiter if file_ext == '.csv' else None
+            }
+            
+        except Exception as preview_error:
+            logger.warning(f"Erro na visualização prévia: {preview_error}")
+            preview_info = {"error": "Não foi possível gerar preview dos dados"}
+        
+        return {
+            "file_path": str(file_path),
+            "filename": file.filename,
+            "unique_filename": unique_filename,
+            "file_size_mb": len(content) / (1024 * 1024),
+            "mime_type": mime_type,
+            "upload_timestamp": datetime.now().isoformat(),
+            "preview": preview_info,
+            "status": "uploaded_successfully"
+        }
+        
+    except Exception as e:
+        # Limpar arquivo se houve erro no processamento
+        if file_path.exists():
+            file_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Erro ao processar arquivo: {str(e)}")
 
 @app.post("/evaluations/{evaluation_id}/approve_step")
 async def approve_evaluation_step(evaluation_id: str, request: StepApprovalRequest):
@@ -1399,7 +1476,7 @@ def _generate_geospatial_recommendations(statistics: Dict[str, Any]) -> List[str
 @app.websocket("/ws/{evaluation_id}")
 async def websocket_endpoint(websocket: WebSocket, evaluation_id: str):
     """
-    Endpoint WebSocket para feedback em tempo real.
+    Endpoint WebSocket para feedback em tempo real com suporte a heartbeat.
     
     Args:
         websocket: Conexão WebSocket
@@ -1409,10 +1486,40 @@ async def websocket_endpoint(websocket: WebSocket, evaluation_id: str):
     
     try:
         while True:
-            # Manter conexão ativa
-            await asyncio.sleep(1)
+            # Aguardar mensagens do cliente (principalmente pongs)
+            try:
+                # Timeout de 60 segundos para receber mensagens
+                message = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+                
+                try:
+                    data = json.loads(message)
+                    message_type = data.get('type')
+                    
+                    if message_type == 'pong':
+                        # Cliente respondeu ao ping
+                        await websocket_manager.handle_pong(connection_id)
+                    elif message_type == 'request_status':
+                        # Cliente solicitou status atual
+                        # Reenviar últimas mensagens
+                        await websocket_manager._send_catchup_messages(connection_id, evaluation_id)
+                    else:
+                        logger.debug(f"Mensagem não reconhecida do cliente {connection_id}: {message_type}")
+                        
+                except json.JSONDecodeError:
+                    logger.warning(f"Mensagem inválida recebida de {connection_id}: {message}")
+                    
+            except asyncio.TimeoutError:
+                # Timeout normal - continuar loop
+                continue
+            except Exception as e:
+                logger.warning(f"Erro ao receber mensagem de {connection_id}: {e}")
+                break
             
     except WebSocketDisconnect:
+        logger.info(f"Cliente {connection_id} desconectou")
+    except Exception as e:
+        logger.error(f"Erro na conexão WebSocket {connection_id}: {e}")
+    finally:
         websocket_manager.disconnect(connection_id)
 
 
