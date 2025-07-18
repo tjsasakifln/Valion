@@ -88,11 +88,24 @@ Valion/
 
 ## 🔬 Technical Methodology
 
-### Statistical Model
-- **Algorithm**: Elastic Net Regression (L1 + L2 regularization)
-- **Validation**: 5-fold cross-validation
+### Glass-Box AI Models
+- **Standard Mode**: Elastic Net Regression (L1 + L2 regularization)
+- **Expert Mode**: XGBoost, Random Forest, Gradient Boosting
+- **Validation**: 5-fold cross-validation with stability analysis
 - **Optimization**: Grid search for hyperparameters
-- **Interpretability**: SHAP (SHapley Additive exPlanations) values
+- **Interpretability**: SHAP (SHapley Additive exPlanations) values with interactive laboratory
+
+### Interactive SHAP Laboratory
+- **Real-time Simulation**: Adjust property features and see instant SHAP impact
+- **Waterfall Charts**: Visual breakdown of each prediction component
+- **Feature Importance**: Permutation-based and SHAP-based rankings
+- **Glass-Box Analysis**: Complete transparency in AI decision-making
+
+### Advanced Analytics Suite
+- **Geospatial Intelligence**: Multi-region POI analysis and transport scoring
+- **Location Clustering**: Automated neighborhood value indexing
+- **Interactive Dashboards**: Real-time model performance monitoring
+- **Comparative Analysis**: Cross-model performance evaluation
 
 ### 5-Phase Evaluation Process
 
@@ -128,7 +141,9 @@ Valion/
 - Technical recommendations
 - Multi-format export (PDF, Excel, JSON)
 
-## 📊 NBR 14653 Precision Levels
+## 🌍 International Valuation Standards
+
+### NBR 14653 (Brazil) - Precision Levels
 
 | Grade | Minimum R² | Description |
 |-------|------------|-------------|
@@ -136,6 +151,26 @@ Valion/
 | **Normal** | ≥ 0.80 | Good explanatory capacity |
 | **Inferior** | ≥ 0.70 | Adequate explanatory capacity |
 | **Inadequate** | < 0.70 | Insufficient explanatory capacity |
+
+### USPAP (United States) - Compliance Framework
+
+| Standard | Validation | Description |
+|----------|------------|-------------|
+| **Methodology Defense** | Statistical rigor | Defensible valuation methodology |
+| **Market Analysis** | Adequacy testing | Comprehensive market data analysis |
+| **Reasonableness** | Result validation | Logical and supportable conclusions |
+| **Best Use Analysis** | Optimization | Highest and best use considerations |
+| **Data Quality** | Verification | Reliable and verified data sources |
+
+### EVS (Europe) - Valuation Standards
+
+| Criterion | Assessment | Description |
+|-----------|------------|-------------|
+| **Market Value** | Basis evaluation | European market value principles |
+| **Sustainability** | Environmental factors | ESG considerations in valuation |
+| **Transparency** | Process clarity | Clear valuation process documentation |
+| **Competence** | Professional standards | Qualified valuation expertise |
+| **Compliance** | Regional regulations | European market compliance |
 
 ## 🧪 Statistical Tests
 
@@ -331,7 +366,7 @@ pytest tests/integration/ -v
 
 2. **Docker Deployment**
    ```bash
-   docker-compose -f docker-compose.prod.yml up -d
+   docker-compose up -d
    ```
 
 3. **Reverse Proxy Configuration** (nginx/traefik recommended)
@@ -346,7 +381,7 @@ pytest tests/integration/ -v
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+We welcome contributions! Please follow these steps:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -361,7 +396,8 @@ This project is licensed under the **Business Source License 1.1** (BSL-1.1).
 - ✅ **Free for development, testing, and non-production use**
 - ✅ **Open source with full transparency**
 - ⏰ **Converts to Apache 2.0 after 4 years**
-- 📋 **Commercial use requires separate license**
+- ⚠️ **Commercial use AND production use require written consent from Tiago Sasaki**
+- 📧 **Contact tiago@confenge.com.br for commercial/production licensing**
 
 See [LICENSE](LICENSE) file for complete details.
 
@@ -380,13 +416,13 @@ See [LICENSE](LICENSE) file for complete details.
 ## 📞 Support
 
 ### Getting Help
-- 📖 Check our [Documentation](docs/)
+- 📖 Check the source code and README for documentation
 - 🐛 [Report Issues](https://github.com/tjsasakifln/Valion/issues)
 - 💬 [Discussions](https://github.com/tjsasakifln/Valion/discussions)
 - 📧 Contact: tiago@confenge.com.br
 
 ### Professional Services
-For enterprise support, custom development, or consulting services, please contact our team.
+For enterprise support, custom development, consulting services, or commercial/production licensing, please contact Tiago Sasaki at tiago@confenge.com.br.
 
 ---
 
