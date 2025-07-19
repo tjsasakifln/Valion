@@ -19,6 +19,8 @@ case "${SERVICE_TYPE:-api}" in
     "api")
         wait_for_service postgres 5432 "PostgreSQL"
         wait_for_service redis 6379 "Redis"
+        echo "Executando verificações de startup..."
+        python startup_check.py
         echo "Iniciando API FastAPI..."
         exec uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --workers 4
         ;;

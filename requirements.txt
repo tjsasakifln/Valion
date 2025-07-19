@@ -91,3 +91,20 @@ shapely>=2.0.0
 folium>=0.15.0
 geopy>=2.3.0
 rtree>=1.0.0
+
+# Privacy and data governance
+faker>=20.1.0
+
+# Missing dependencies for API functionality
+python-magic>=0.4.27
+alembic>=1.12.0
+
+# WebSocket support
+aiofiles>=23.2.0
+
+# Additional ML dependencies
+optuna>=3.4.0
+lightgbm>=4.1.0
+
+# Performance and caching
+cachetools>=5.3.0

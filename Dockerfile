@@ -19,11 +19,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copiar apenas requirements primeiro para aproveitar cache do Docker
-COPY requirements/ requirements/
+COPY requirements.txt requirements.txt
 
-# Build stage com ARG para tipo de serviço
-ARG SERVICE_TYPE=api
-RUN pip install --no-cache-dir -r requirements/${SERVICE_TYPE}.txt
+# Install all requirements
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Estágio final - runtime
 FROM python:3.11-slim
@@ -41,6 +40,7 @@ ENV SERVICE_TYPE=${SERVICE_TYPE}
 RUN apt-get update && apt-get install -y \
     libpq5 \
     curl \
+    netcat-traditional \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r valion && useradd -r -g valion valion
 
