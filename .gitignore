@@ -156,3 +156,107 @@ docker-compose.override.yml
 .env.production.local
 secrets.json
 credentials.json
+config.ini
+settings.json
+private_keys/
+ssl_certificates/
+
+# --- Security and Privacy ---
+# Private keys and certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.db-journal
+
+# Backup files
+*.bak
+*.backup
+*.sql
+*.dump
+
+# User data exports (GDPR)
+user_exports/
+data_exports/
+anonymized_data/
+gdpr_exports/
+
+# Model artifacts and cache
+model_cache/
+model_artifacts/
+ml_models/
+*.pkl
+*.joblib
+*.h5
+*.hdf5
+*.onnx
+
+# Data processing temporary files
+processing_temp/
+data_temp/
+temp_uploads/
+cache/
+.cache/
+
+# Streamlit
+.streamlit/
+streamlit_app.log
+
+# FastAPI
+.pytest_cache
+htmlcov/
+.coverage
+coverage.xml
+
+# Redis dump files
+dump.rdb
+appendonly.aof
+
+# Node.js (if frontend tools are added)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# --- Platform specific ---
+# Windows
+*.lnk
+desktop.ini
+
+# Linux
+*~
+.nfs*
+
+# macOS
+.AppleDouble
+.LSOverride
+Icon
+
+# --- Development and Testing ---
+# Coverage reports
+.coverage
+.coverage.*
+coverage/
+*.cover
+*.py,cover
+.hypothesis/
+
+# Unit test / test artifacts
+.pytest_cache/
+test-results/
+test_reports/
+.nox/
+
+# Profiling data
+.prof
+*.profile
