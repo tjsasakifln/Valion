@@ -234,8 +234,13 @@ class EvaluationRequest(BaseModel):
         if self.mode not in ["standard", "expert"]:
             raise ValueError("Mode must be 'standard' or 'expert'")
         
-        if self.valuation_standard not in ["NBR 14653", "USPAP", "EVS"]:
-            raise ValueError("Valuation standard must be 'NBR 14653', 'USPAP', or 'EVS'")
+        # --- ATUALIZAR LISTA DE NORMAS SUPORTADAS ---
+        supported_standards = [
+            "NBR 14653", "USPAP", "EVS",
+            "RICS Red Book", "IVS", "CUSPAP", "API"
+        ]
+        if self.valuation_standard not in supported_standards:
+            raise ValueError(f"Valuation standard must be one of {supported_standards}")
         
         # Configure expert_mode and valuation_standard in config
         if self.config is None:

@@ -1,6 +1,6 @@
 # Valion - Global AI-Powered Real Estate Valuation Platform
 
-**The world's only property valuation engine designed for simultaneous compliance with NBR 14653 (Brazil), USPAP (USA), and EVS (Europe). A "Glass-Box" solution that transforms property appraisal from a time-consuming process into a transparent, auditable, and instantaneous analysis.**
+**The world's most comprehensive property valuation engine designed for simultaneous compliance with 7 major international standards: NBR 14653 (Brazil), USPAP (USA), EVS (Europe), RICS Red Book (UK/Commonwealth), IVS (International), CUSPAP (Canada), and API (Australia). A "Glass-Box" solution that transforms property appraisal from a time-consuming process into a transparent, auditable, and instantaneous analysis.**
 
 [![License: BSL-1.1](https://img.shields.io/badge/License-BSL--1.1-blue.svg)](https://github.com/tjsasakifln/Valion/blob/main/LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -21,7 +21,7 @@ The global PropTech market is projected to grow from ~$40 billion in 2024 to $88
 | Category | Core Feature | Business Benefit |
 | :--- | :--- | :--- |
 | 🤖 **AI-Powered Valuation** | "Glass-Box" models with SHAP | Delivers full transparency and auditability, eliminating "black-box" risk. |
-| 🌍 **Global Compliance** | Native support for NBR 14653, USPAP, & EVS | Unifies global operations, reducing regulatory risk and operational overhead. |
+| 🌍 **Global Compliance** | Native support for 7 international standards | Unifies global operations across all major valuation jurisdictions, reducing regulatory risk and operational overhead. |
 | 🏗️ **MLOps & Microservices** | Complete MLOps Pipeline & Scalable Architecture | Enterprise-ready for production, ensuring reliability, scalability, and agile maintenance. |
 | 🗺️ **Geospatial Intelligence** | POI, Accessibility, & Cluster Analysis | Generates powerful location-based features that increase accuracy and provide market insights. |
 | ⚡ **Interactive Analysis** | SHAP Laboratory & Dynamic Reporting | Enables users to simulate scenarios and understand the real-world impact of each property feature. |
@@ -100,6 +100,42 @@ The fastest and most reliable way to run the complete Valion platform.
 | **Sustainability** | Environmental factors | ESG considerations in valuation |
 | **Transparency** | Process clarity | Clear valuation process documentation |
 
+### RICS Red Book (UK/Commonwealth) - Professional Standards
+
+| Standard | Validation | Description |
+|----------|------------|-------------|
+| **Market Value Basis** | Clear market definition | Unambiguous basis for market value determination |
+| **Professional Competence** | Methodology quality | Adherence to professional valuation practices |
+| **Due Diligence** | Accuracy requirements | MAPE ≤ 20% for professional standards |
+| **Reporting Clarity** | Transparency score | Clear and interpretable valuation results |
+
+### IVS (International) - Global Standards
+
+| Criterion | Assessment | Description |
+|-----------|------------|-------------|
+| **Bases of Value** | Market value compliance | Consistency with international market value concepts |
+| **Valuation Approaches** | Methodology alignment | Adherence to market, income, or cost approaches |
+| **International Consistency** | R² ≥ 0.65 | Meeting international accuracy standards |
+| **Transparency** | Methodology disclosure | Clear documentation of valuation process |
+
+### CUSPAP (Canada) - Professional Practice
+
+| Standard | Validation | Description |
+|----------|------------|-------------|
+| **Credible Results** | R² ≥ 0.70, MAPE ≤ 15% | High accuracy standards for credible assignments |
+| **Professional Competency** | Model selection quality | Use of established, transparent methodologies |
+| **Canadian Market Relevance** | Feature appropriateness | Integration of Canadian market characteristics |
+| **Unbiased Analysis** | Systematic bias ≤ 5% | Ethical standards for unbiased valuation |
+
+### API (Australia) - Property Institute Standards
+
+| Criterion | Assessment | Description |
+|-----------|------------|-------------|
+| **Australian Market Evidence** | Local feature integration | Comprehensive Australian market data |
+| **Professional Practice** | Methodology standards | Adherence to API professional guidelines |
+| **Valuation Accuracy** | R² ≥ 0.75, MAPE ≤ 12% | High precision requirements |
+| **Regulatory Compliance** | Australian requirements | Compliance with local regulatory framework |
+
 ## 🔬 Glass-Box AI Technology
 
 ### Explainable AI Models
@@ -146,9 +182,13 @@ The fastest and most reliable way to run the complete Valion platform.
 ## 🗺️ Geospatial Intelligence
 
 ### Multi-Region Support
-- **Brazil**: Complete POI database with transport accessibility
-- **United States**: Comprehensive location analysis with market clustering
-- **Europe**: Regional compliance with environmental sustainability factors
+- **Brazil**: Complete POI database with transport accessibility (Metro, Bus, Train)
+- **United States**: Comprehensive location analysis with market clustering (Subway, Bus, Light Rail)
+- **Europe**: Regional compliance with environmental sustainability factors (Metro, Bus, Tram, Train)
+- **United Kingdom**: London-centered analysis with British transport systems (Tube, Bus, Train)
+- **Canada**: Toronto-centered with Canadian transport infrastructure (Subway, Bus, Streetcar)
+- **Australia**: Sydney-centered with Australian transport networks (Train, Bus, Ferry)
+- **International**: Global neutral configuration for cross-border portfolios
 
 ### Advanced Location Analytics
 - **POI Scoring**: Automated scoring of nearby amenities and services
@@ -183,7 +223,11 @@ The fastest and most reliable way to run the complete Valion platform.
 - **🇧🇷 Brazilian Market**: NBR 14653 compliance with local POI database
 - **🇺🇸 US Market**: USPAP-compliant methodology with comprehensive analysis
 - **🇪🇺 European Market**: EVS standards with sustainability considerations
-- **🌐 International**: Multi-standard support for global portfolios
+- **🇬🇧 UK/Commonwealth Markets**: RICS Red Book compliance with professional standards
+- **🌐 International Markets**: IVS standards for cross-border consistency
+- **🇨🇦 Canadian Market**: CUSPAP compliance with Canadian market specifics
+- **🇦🇺 Australian Market**: API standards with local regulatory compliance
+- **🌍 Global Portfolios**: Multi-standard support for multinational operations
 
 ## 📋 API Reference
 
@@ -297,7 +341,7 @@ Please get in touch to discuss commercial licensing and partnership opportunitie
 
 **🏠 Valion** - *Global AI-Powered Real Estate Valuation Platform*
 
-*The strategic compliance engine for multinational property valuation operations*
+*The world's most comprehensive multi-standard compliance engine for multinational property valuation operations*
 
 Made with precision for enterprise real estate professionals worldwide
 

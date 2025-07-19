@@ -106,6 +106,47 @@ class GeospatialAnalyzer:
                 'poi_categories': ['shopping', 'healthcare', 'education', 'recreation', 'public_transport', 'finance'],
                 'transport_types': ['metro', 'bus', 'tram', 'train'],
                 'address_components': ['house_number', 'road', 'neighbourhood', 'city', 'state', 'country']
+            },
+            # --- NOVAS CONFIGURAÇÕES ---
+            'United Kingdom': {
+                'default_city_center': (51.5074, -0.1278),  # Londres
+                'city_name': 'London',
+                'country_code': 'GB',
+                'geocoder_language': 'en',
+                'density_reference': 70,
+                'poi_categories': ['shopping', 'healthcare', 'education', 'recreation', 'transport', 'finance'],
+                'transport_types': ['tube', 'bus', 'train'],
+                'address_components': ['house_number', 'road', 'city', 'county', 'country']
+            },
+            'Canada': {
+                'default_city_center': (43.6532, -79.3832),  # Toronto
+                'city_name': 'Toronto',
+                'country_code': 'CA',
+                'geocoder_language': 'en',
+                'density_reference': 55,
+                'poi_categories': ['shopping', 'healthcare', 'education', 'recreation', 'transit', 'finance'],
+                'transport_types': ['subway', 'bus', 'streetcar'],
+                'address_components': ['house_number', 'road', 'city', 'province', 'country']
+            },
+            'Australia': {
+                'default_city_center': (-33.8688, 151.2093),  # Sydney
+                'city_name': 'Sydney',
+                'country_code': 'AU',
+                'geocoder_language': 'en',
+                'density_reference': 45,
+                'poi_categories': ['shopping', 'healthcare', 'education', 'recreation', 'transport', 'finance'],
+                'transport_types': ['train', 'bus', 'ferry'],
+                'address_components': ['house_number', 'road', 'suburb', 'city', 'state', 'country']
+            },
+            'International': {
+                'default_city_center': (48.8566, 2.3522),  # Paris (Ponto neutro)
+                'city_name': '',
+                'country_code': None, # Sem restrição de país
+                'geocoder_language': 'en',
+                'density_reference': 50,
+                'poi_categories': ['shopping', 'healthcare', 'education', 'recreation', 'transport', 'finance'],
+                'transport_types': ['metro', 'bus', 'train'],
+                'address_components': ['house_number', 'road', 'city', 'country']
             }
         }
         
@@ -787,7 +828,13 @@ def create_geospatial_analyzer(city_center: Optional[Tuple[float, float]] = None
     standard_to_region = {
         'NBR 14653': 'Brazil',
         'USPAP': 'United States',
-        'EVS': 'Europe'
+        'EVS': 'Europe',
+        # --- NOVOS MAPEAMENTOS ---
+        'RICS': 'United Kingdom',
+        'RICS Red Book': 'United Kingdom',
+        'IVS': 'International',
+        'CUSPAP': 'Canada',
+        'API': 'Australia'
     }
     
     region = standard_to_region.get(valuation_standard, 'Brazil')

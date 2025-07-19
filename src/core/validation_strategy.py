@@ -193,7 +193,7 @@ class ValidatorFactory:
         Create appropriate validator based on standard.
         
         Args:
-            standard: Validation standard ('NBR14653', 'USPAP', 'EVS')
+            standard: Validation standard ('NBR14653', 'USPAP', 'EVS', 'RICS', 'IVS', 'CUSPAP', 'API')
             model: Trained model
             X_train: Training features
             y_train: Training target
@@ -207,14 +207,30 @@ class ValidatorFactory:
         Raises:
             ValueError: If standard is not supported
         """
-        if standard.upper() == 'NBR14653':
+        # Normalize standard name for comparison
+        standard_upper = standard.upper().replace(" ", "").replace('"', '').replace("'", "")
+
+        if 'NBR14653' in standard_upper:
             from .nbr14653_validation import NBR14653Validator
             return NBR14653Validator(model, X_train, y_train, X_test, y_test, config)
-        elif standard.upper() == 'USPAP':
+        elif 'USPAP' in standard_upper:
             from .uspap_validation import USPAPValidator
             return USPAPValidator(model, X_train, y_train, X_test, y_test, config)
-        elif standard.upper() == 'EVS':
+        elif 'EVS' in standard_upper:
             from .evs_validation import EVSValidator
             return EVSValidator(model, X_train, y_train, X_test, y_test, config)
+        # --- NOVOS VALIDADORES ---
+        elif 'RICS' in standard_upper:
+            from .rics_validation import RICSValidator
+            return RICSValidator(model, X_train, y_train, X_test, y_test, config)
+        elif 'IVS' in standard_upper:
+            from .ivs_validation import IVSValidator
+            return IVSValidator(model, X_train, y_train, X_test, y_test, config)
+        elif 'CUSPAP' in standard_upper:
+            from .cuspap_validation import CUSPAPValidator
+            return CUSPAPValidator(model, X_train, y_train, X_test, y_test, config)
+        elif 'API' in standard_upper:
+            from .api_validation import APIValidator
+            return APIValidator(model, X_train, y_train, X_test, y_test, config)
         else:
             raise ValueError(f"Unsupported validation standard: {standard}")

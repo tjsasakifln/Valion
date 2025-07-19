@@ -862,7 +862,8 @@ def show_new_evaluation_page():
             # Adicionar seletor de norma
             valuation_standard = st.selectbox(
                 "Norma de Avaliação",
-                options=["NBR 14653", "USPAP", "EVS"],
+                # --- ATUALIZAR LISTA DE OPÇÕES ---
+                options=["NBR 14653", "USPAP", "EVS", "RICS Red Book", "IVS", "CUSPAP", "API"],
                 help="Selecione a norma técnica a ser seguida na avaliação."
             )
             
