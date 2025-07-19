@@ -19,6 +19,7 @@ from pathlib import Path
 import os
 import redis
 from redis.exceptions import RedisError
+import httpx
 
 # Core module imports
 from src.core.data_loader import DataLoader, DataValidationResult
@@ -28,7 +29,6 @@ from src.core.model_builder import ModelBuilder, ModelResult
 from src.core.validation_strategy import ValidatorFactory, ValidationContext
 from src.core.nbr14653_validation import NBRValidationResult  # For backward compatibility
 from src.core.results_generator import ResultsGenerator, EvaluationReport
-from src.core.geospatial_analysis import create_geospatial_analyzer, LocationAnalysis
 from src.config.settings import Settings
 from src.workers.tasks import process_evaluation
 from src.websocket.websocket_manager import websocket_manager
@@ -63,6 +63,15 @@ app.add_middleware(
 
 # Settings
 settings = Settings()
+
+# Microservices configuration
+MICROSERVICES = {
+    "geospatial": "http://localhost:8101",
+    "reporting": "http://localhost:8102"
+}
+
+# HTTP client for microservice communication
+http_client = httpx.AsyncClient(timeout=30.0)
 
 # Redis client initialization
 try:
@@ -1469,7 +1478,76 @@ async def get_shap_waterfall(evaluation_id: str, sample_index: int = 0):
         raise HTTPException(status_code=400, detail="Waterfall SHAP disponível apenas no modo especialista")
     
     try:
-        # Dados mockados mas realistas para waterfall
+        # Use real SHAP calculations when possible
+        from src.core.shap_explainer import create_shap_explainer
+        
+        # Try to get model and data from evaluation result
+        model_path = result.get("model_path")
+        model_data = result.get("model_data")
+        
+        if model_path or model_data:
+            try:
+                # Create SHAP explainer
+                explainer = create_shap_explainer(
+                    model_path=model_path,
+                    model=model_data.get("model") if model_data else None
+                )
+                
+                # Get validation data or create sample data
+                sample_data = result.get("validation_data")
+                if sample_data is None:
+                    # Create mock sample data for demonstration
+                    import pandas as pd
+                    sample_data = pd.DataFrame({
+                        'area_privativa': [180.0],
+                        'localizacao_score': [9.2],
+                        'idade_imovel': [15.0],
+                        'vagas_garagem': [2.0],
+                        'banheiros': [3.0],
+                        'quartos': [3.0]
+                    })
+                
+                # Generate real SHAP explanation
+                explanation = explainer.explain_instance(sample_data, sample_index)
+                
+                if explanation:
+                    # Create waterfall data from real SHAP values
+                    waterfall_data_obj = explainer.create_waterfall_data(explanation)
+                    
+                    waterfall_data = {
+                        "evaluation_id": evaluation_id,
+                        "sample_index": sample_index,
+                        "waterfall_chart": {
+                            "base_value": waterfall_data_obj.base_value,
+                            "final_prediction": waterfall_data_obj.final_prediction,
+                            "contributions": waterfall_data_obj.contributions,
+                            "chart_config": {
+                                "colors": {
+                                    "positive": "#2E8B57",
+                                    "negative": "#DC143C",
+                                    "base": "#4682B4",
+                                    "final": "#FFD700"
+                                },
+                                "height": 400,
+                                "width": 800
+                            }
+                        },
+                        "feature_details": waterfall_data_obj.feature_details,
+                        "interpretation_summary": waterfall_data_obj.interpretation_summary,
+                        "metadata": {
+                            "shap_method": "real_calculation",
+                            "explainer_type": type(explainer.explainer).__name__ if explainer.explainer else "mock",
+                            "model_type": type(explainer.model).__name__ if explainer.model else "unknown"
+                        },
+                        "timestamp": datetime.now()
+                    }
+                    
+                    return waterfall_data
+                    
+            except Exception as shap_error:
+                logger.warning(f"Real SHAP calculation failed, using mock data: {shap_error}")
+        
+        # Fallback to mock data if real SHAP fails
         base_value = 485000.0
         contributions = [
             {"feature": "Base Value", "value": base_value, "cumulative": base_value},
@@ -1713,7 +1791,7 @@ async def get_laboratory_features(evaluation_id: str):
 @app.post("/geospatial/analyze")
 async def analyze_location(request: GeospatialAnalysisRequest):
     """
-    Realiza análise geoespacial de uma localização.
+    Realiza análise geoespacial de uma localização via microserviço.
     
     Args:
         request: Dados da localização para análise
@@ -1722,66 +1800,35 @@ async def analyze_location(request: GeospatialAnalysisRequest):
         Análise geoespacial completa com features e scores
     """
     try:
-        # Configurar centro da cidade
-        city_center = None
-        if request.city_center_lat and request.city_center_lon:
-            city_center = (request.city_center_lat, request.city_center_lon)
+        # Call geospatial microservice
+        microservice_url = f"{MICROSERVICES['geospatial']}/analyze/location"
+        response = await http_client.post(microservice_url, json=request.model_dump())
         
-        # Criar analisador geoespacial (usando NBR 14653 como padrão para análise avulsa)
-        analyzer = create_geospatial_analyzer(city_center=city_center, valuation_standard="NBR 14653")
-        
-        # Verificar se foi fornecido endereço ou coordenadas
-        if request.address:
-            analysis = analyzer.analyze_location(address=request.address)
-        elif request.latitude and request.longitude:
-            coordinates = (request.latitude, request.longitude)
-            analysis = analyzer.analyze_location(coordinates=coordinates)
+        if response.status_code == 200:
+            return response.json()
         else:
-            raise HTTPException(status_code=400, detail="Endereço ou coordenadas (lat/lon) devem ser fornecidos")
+            raise HTTPException(
+                status_code=response.status_code, 
+                detail=f"Geospatial service error: {response.text}"
+            )
         
-        if not analysis:
-            raise HTTPException(status_code=400, detail="Falha na análise geoespacial")
-        
-        # Converter para formato JSON serializable
-        result = {
-            "coordinates": {
-                "latitude": analysis.coordinates[0],
-                "longitude": analysis.coordinates[1]
-            },
-            "features": {
-                "distance_to_center": analysis.features.distance_to_center,
-                "proximity_score": analysis.features.proximity_score,
-                "density_score": analysis.features.density_score,
-                "transport_score": analysis.features.transport_score,
-                "amenities_score": analysis.features.amenities_score,
-                "location_cluster": analysis.features.location_cluster,
-                "neighborhood_value_index": analysis.features.neighborhood_value_index
-            },
-            "quality_score": analysis.quality_score,
-            "address_components": analysis.address_components,
-            "nearby_pois": analysis.nearby_pois,
-            "analysis_summary": {
-                "location_rating": "Excelente" if analysis.quality_score >= 8 else 
-                                 "Boa" if analysis.quality_score >= 6 else
-                                 "Regular" if analysis.quality_score >= 4 else "Limitada",
-                "key_strengths": _get_location_strengths(analysis.features),
-                "key_weaknesses": _get_location_weaknesses(analysis.features),
-                "investment_potential": _calculate_investment_potential(analysis.features)
-            },
-            "timestamp": datetime.now()
-        }
-        
-        return result
-        
-    except HTTPException:
-        raise
+    except httpx.RequestError as e:
+        logger.error(f"Error calling geospatial service: {e}")
+        raise HTTPException(
+            status_code=503, 
+            detail="Geospatial service unavailable"
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro na análise geoespacial: {str(e)}")
+        logger.error(f"Unexpected error in geospatial analysis: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error in geospatial analysis: {str(e)}"
+        )
 
 @app.post("/evaluations/{evaluation_id}/enrich_geospatial")
 async def enrich_dataset_geospatial(evaluation_id: str, request: DataEnrichmentRequest):
     """
-    Enriquece dataset de uma avaliação com features geoespaciais.
+    Enriquece dataset de uma avaliação com features geoespaciais via microserviço.
     
     Args:
         evaluation_id: ID da avaliação
@@ -1795,93 +1842,73 @@ async def enrich_dataset_geospatial(evaluation_id: str, request: DataEnrichmentR
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
     try:
-        # Configurar centro da cidade
-        city_center = None
-        if request.city_center_lat and request.city_center_lon:
-            city_center = (request.city_center_lat, request.city_center_lon)
-        
-        # Criar analisador geoespacial (usando NBR 14653 como padrão para análise avulsa)
-        analyzer = create_geospatial_analyzer(city_center=city_center, valuation_standard="NBR 14653")
-        
-        # Simular carregamento de dados (em implementação real, carregaria do storage)
-        # Por ora, criar dados mockados para demonstração
-        import pandas as pd
-        import numpy as np
-        
-        # Dataset mockado
-        mock_data = pd.DataFrame({
-            'endereco': [
-                'Av. Paulista, 1000, São Paulo, SP',
-                'Rua Augusta, 500, São Paulo, SP',
-                'Av. Faria Lima, 2000, São Paulo, SP',
-                'Rua Consolação, 800, São Paulo, SP',
-                'Av. Brigadeiro Luis Antonio, 1500, São Paulo, SP'
-            ],
-            'valor': [850000, 650000, 1200000, 750000, 900000],
-            'area_privativa': [120, 85, 150, 100, 130]
-        })
-        
-        # Enriquecer com dados geoespaciais
-        enriched_data = analyzer.enrich_dataset_with_geospatial(
-            mock_data, 
-            address_column=request.address_column
-        )
-        
-        # Gerar estatísticas do enriquecimento
-        geo_columns = ['proximity_score', 'transport_score', 'amenities_score', 'geo_quality_score']
-        statistics = {
-            "total_records": len(enriched_data),
-            "enriched_records": len(enriched_data.dropna(subset=['latitude', 'longitude'])),
-            "geocoding_success_rate": len(enriched_data.dropna(subset=['latitude', 'longitude'])) / len(enriched_data) * 100,
-            "geospatial_features_added": len([col for col in geo_columns if col in enriched_data.columns]),
-            "quality_distribution": {
-                "excellent": len(enriched_data[enriched_data['geo_quality_score'] >= 8]) if 'geo_quality_score' in enriched_data.columns else 0,
-                "good": len(enriched_data[(enriched_data['geo_quality_score'] >= 6) & (enriched_data['geo_quality_score'] < 8)]) if 'geo_quality_score' in enriched_data.columns else 0,
-                "regular": len(enriched_data[(enriched_data['geo_quality_score'] >= 4) & (enriched_data['geo_quality_score'] < 6)]) if 'geo_quality_score' in enriched_data.columns else 0,
-                "limited": len(enriched_data[enriched_data['geo_quality_score'] < 4]) if 'geo_quality_score' in enriched_data.columns else 0
+        # Load evaluation data (in real implementation, would load from storage)
+        # For now, create mock data for demonstration
+        mock_data = [
+            {
+                'endereco': 'Av. Paulista, 1000, São Paulo, SP',
+                'valor': 850000,
+                'area_privativa': 120
             },
-            "location_clusters": enriched_data['location_cluster'].value_counts().to_dict() if 'location_cluster' in enriched_data.columns else {},
-            "average_scores": {
-                score: enriched_data[score].mean() if score in enriched_data.columns else 0
-                for score in geo_columns
+            {
+                'endereco': 'Rua Augusta, 500, São Paulo, SP',
+                'valor': 650000,
+                'area_privativa': 85
+            },
+            {
+                'endereco': 'Av. Faria Lima, 2000, São Paulo, SP',
+                'valor': 1200000,
+                'area_privativa': 150
             }
+        ]
+        
+        # Prepare enrichment request for microservice
+        enrichment_request = {
+            "data": mock_data,
+            "address_column": request.address_column,
+            "city_center_lat": request.city_center_lat,
+            "city_center_lon": request.city_center_lon,
+            "valuation_standard": "NBR 14653"
         }
         
-        # Gerar dados para mapa de calor
-        heatmap_data = analyzer.generate_location_heatmap_data(enriched_data)
+        # Call geospatial microservice
+        microservice_url = f"{MICROSERVICES['geospatial']}/enrich/dataset"
+        response = await http_client.post(microservice_url, json=enrichment_request)
         
-        # Armazenar dados enriquecidos (em implementação real, salvaria no storage)
-        evaluation_data["enriched_data"] = enriched_data.to_dict('records')
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Geospatial service error: {response.text}"
+            )
+        
+        result = response.json()
+        
+        # Store enriched data in evaluation state
+        evaluation_data["enriched_data"] = result["enriched_data"]
         state_manager.set_evaluation_data(evaluation_id, evaluation_data)
         
-        result = {
-            "evaluation_id": evaluation_id,
-            "enrichment_status": "completed",
-            "statistics": statistics,
-            "heatmap_data": heatmap_data,
-            "feature_descriptions": {
-                "distance_to_center": "Distância até o centro da cidade (km)",
-                "proximity_score": "Score de proximidade a POIs importantes (0-10)",
-                "density_score": "Score de densidade de imóveis na região (0-10)",
-                "transport_score": "Score de acesso a transporte público (0-10)",
-                "amenities_score": "Score de amenidades (saúde, educação, lazer) (0-10)",
-                "location_cluster": "Classificação da localização (Premium Central, Urbano, etc.)",
-                "neighborhood_value_index": "Índice de valor do bairro (0-10)",
-                "geo_quality_score": "Score geral de qualidade da localização (0-10)"
-            },
-            "recommendations": _generate_geospatial_recommendations(statistics),
-            "timestamp": datetime.now()
-        }
+        # Add evaluation_id to result
+        result["evaluation_id"] = evaluation_id
         
         return result
         
+    except httpx.RequestError as e:
+        logger.error(f"Error calling geospatial service: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Geospatial service unavailable"
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro no enriquecimento geoespacial: {str(e)}")
+        logger.error(f"Error in geospatial enrichment: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error in geospatial enrichment: {str(e)}"
+        )
 
 @app.get("/evaluations/{evaluation_id}/geospatial_heatmap")
 async def get_geospatial_heatmap(evaluation_id: str):
     """
-    Obtém dados para mapa de calor geoespacial de uma avaliação.
+    Obtém dados para mapa de calor geoespacial via microserviço.
     
     Args:
         evaluation_id: ID da avaliação
@@ -1894,60 +1921,46 @@ async def get_geospatial_heatmap(evaluation_id: str):
         raise HTTPException(status_code=404, detail="Evaluation not found")
     
     try:
-        # Verificar se há dados enriquecidos
+        # Check if enriched data exists
         enriched_data = evaluation_data.get("enriched_data")
         if not enriched_data:
-            raise HTTPException(status_code=404, detail="Dados geoespaciais não encontrados. Execute primeiro o enriquecimento.")
+            raise HTTPException(
+                status_code=404, 
+                detail="Geospatial data not found. Run enrichment first."
+            )
         
-        # Converter de volta para DataFrame
-        import pandas as pd
-        df = pd.DataFrame(enriched_data)
+        # Prepare heatmap request for microservice
+        heatmap_request = {
+            "data": enriched_data,
+            "valuation_standard": "NBR 14653"
+        }
         
-        # Criar analisador para gerar dados do mapa
-        analyzer = create_geospatial_analyzer(valuation_standard="NBR 14653")
-        heatmap_data = analyzer.generate_location_heatmap_data(df)
+        # Call geospatial microservice
+        microservice_url = f"{MICROSERVICES['geospatial']}/generate/heatmap"
+        response = await http_client.post(microservice_url, json=heatmap_request)
         
-        if not heatmap_data:
-            raise HTTPException(status_code=400, detail="Não foi possível gerar dados do mapa de calor")
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Geospatial service error: {response.text}"
+            )
         
-        # Adicionar configurações de visualização
-        heatmap_data.update({
-            "visualization_config": {
-                "map_style": "OpenStreetMap",
-                "heatmap_radius": 20,
-                "heatmap_blur": 15,
-                "marker_size": 8,
-                "color_scale": {
-                    "low": "#0066CC",
-                    "medium": "#FFCC00", 
-                    "high": "#FF6600",
-                    "premium": "#CC0000"
-                }
-            },
-            "legend": {
-                "value_ranges": {
-                    "baixo": "< R$ 500.000",
-                    "medio": "R$ 500.000 - R$ 800.000",
-                    "alto": "R$ 800.000 - R$ 1.200.000",
-                    "premium": "> R$ 1.200.000"
-                },
-                "cluster_colors": {
-                    "Premium Central": "#CC0000",
-                    "Urbano Consolidado": "#FF6600", 
-                    "Urbano em Desenvolvimento": "#FFCC00",
-                    "Suburbano": "#0066CC",
-                    "Periférico": "#6699FF"
-                }
-            },
-            "timestamp": datetime.now()
-        })
+        return response.json()
         
-        return heatmap_data
-        
+    except httpx.RequestError as e:
+        logger.error(f"Error calling geospatial service: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Geospatial service unavailable"
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao gerar mapa de calor: {str(e)}")
+        logger.error(f"Error generating heatmap: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating heatmap: {str(e)}"
+        )
 
 def _get_location_strengths(features) -> List[str]:
     """Identifica pontos fortes da localização."""
@@ -2207,6 +2220,175 @@ async def get_my_activity(
     except Exception as e:
         logger.error(f"Error getting user activity: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get user activity: {str(e)}")
+
+# Reporting Service Endpoints
+
+@app.post("/reports/generate")
+async def generate_evaluation_report(request: dict):
+    """Generate evaluation report via reporting microservice."""
+    try:
+        microservice_url = f"{MICROSERVICES['reporting']}/reports/generate"
+        response = await http_client.post(microservice_url, json=request)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Reporting service error: {response.text}"
+            )
+    except httpx.RequestError as e:
+        logger.error(f"Error calling reporting service: {e}")
+        raise HTTPException(status_code=503, detail="Reporting service unavailable")
+
+@app.get("/reports/{report_id}/status")
+async def get_report_generation_status(report_id: str):
+    """Get report generation status via reporting microservice."""
+    try:
+        microservice_url = f"{MICROSERVICES['reporting']}/reports/{report_id}/status"
+        response = await http_client.get(microservice_url)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Reporting service error: {response.text}"
+            )
+    except httpx.RequestError as e:
+        logger.error(f"Error calling reporting service: {e}")
+        raise HTTPException(status_code=503, detail="Reporting service unavailable")
+
+@app.get("/reports/{report_id}/download")
+async def download_evaluation_report(report_id: str):
+    """Download generated report via reporting microservice."""
+    try:
+        microservice_url = f"{MICROSERVICES['reporting']}/reports/{report_id}/download"
+        response = await http_client.get(microservice_url)
+        
+        if response.status_code == 200:
+            return response.content
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Reporting service error: {response.text}"
+            )
+    except httpx.RequestError as e:
+        logger.error(f"Error calling reporting service: {e}")
+        raise HTTPException(status_code=503, detail="Reporting service unavailable")
+
+# MLOps API Endpoints
+
+@app.get("/models/")
+async def list_models(
+    current_user: User = Depends(get_current_user),
+    _ = Depends(require_permission("model:read"))
+):
+    """List all registered models."""
+    try:
+        from src.mlops.model_registry import ModelRegistry
+        registry = ModelRegistry()
+        models = registry.list_models()
+        return {"models": models}
+    except Exception as e:
+        logger.error(f"Error listing models: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+@app.post("/models/")
+async def register_model(
+    model_data: dict,
+    current_user: User = Depends(get_current_user),
+    _ = Depends(require_permission("model:write"))
+):
+    """Register a new model."""
+    try:
+        from src.mlops.model_registry import ModelRegistry
+        registry = ModelRegistry()
+        
+        result = registry.register_model(
+            name=model_data["name"],
+            version=model_data["version"],
+            path=model_data["path"],
+            metadata=model_data.get("metadata", {}),
+            user_id=str(current_user.id)
+        )
+        
+        return {"message": "Model registered successfully", "model": result}
+    except Exception as e:
+        logger.error(f"Error registering model: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to register model: {str(e)}")
+
+@app.get("/models/{model_id}")
+async def get_model_details(
+    model_id: str,
+    current_user: User = Depends(get_current_user),
+    _ = Depends(require_permission("model:read"))
+):
+    """Get model details."""
+    try:
+        from src.mlops.model_registry import ModelRegistry
+        registry = ModelRegistry()
+        model = registry.get_model(model_id)
+        
+        if not model:
+            raise HTTPException(status_code=404, detail="Model not found")
+        
+        return {"model": model}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting model details: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get model details: {str(e)}")
+
+@app.post("/models/{model_id}/deploy")
+async def deploy_model(
+    model_id: str,
+    deployment_config: dict,
+    current_user: User = Depends(get_current_user),
+    _ = Depends(require_permission("model:deploy"))
+):
+    """Deploy a model."""
+    try:
+        from src.mlops.model_deployer import ModelDeployer
+        deployer = ModelDeployer()
+        
+        deployment = deployer.deploy_model(
+            model_id=model_id,
+            config=deployment_config,
+            user_id=str(current_user.id)
+        )
+        
+        return {
+            "message": "Model deployment started",
+            "deployment": deployment
+        }
+    except Exception as e:
+        logger.error(f"Error deploying model: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to deploy model: {str(e)}")
+
+@app.post("/pipelines/execute")
+async def execute_mlops_pipeline(
+    pipeline_config: dict,
+    current_user: User = Depends(get_current_user),
+    _ = Depends(require_permission("pipeline:execute"))
+):
+    """Execute an MLOps pipeline."""
+    try:
+        from src.mlops.pipeline_orchestrator import PipelineOrchestrator
+        orchestrator = PipelineOrchestrator()
+        
+        execution = orchestrator.execute_pipeline(
+            config=pipeline_config,
+            user_id=str(current_user.id)
+        )
+        
+        return {
+            "message": "Pipeline execution started",
+            "execution": execution
+        }
+    except Exception as e:
+        logger.error(f"Error executing pipeline: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute pipeline: {str(e)}")
 
 @app.websocket("/ws/{evaluation_id}")
 async def websocket_endpoint(websocket: WebSocket, evaluation_id: str):

@@ -97,6 +97,26 @@ async def run_single_service(service_name: str, args):
             
             print(f"✅ {service_name} started at http://localhost:8002")
             
+        elif service_name == "geospatial_service":
+            import uvicorn
+            print(f"✅ {service_name} starting at http://localhost:8101")
+            await uvicorn.run(
+                "src.microservices.geospatial_service.main:app",
+                host="0.0.0.0",
+                port=8101,
+                log_level="info" if not args.debug else "debug"
+            )
+            
+        elif service_name == "reporting_service":
+            import uvicorn
+            print(f"✅ {service_name} starting at http://localhost:8102")
+            await uvicorn.run(
+                "src.microservices.reporting_service.main:app",
+                host="0.0.0.0",
+                port=8102,
+                log_level="info" if not args.debug else "debug"
+            )
+            
         elif service_name == "service_registry":
             service = ServiceRegistry(redis_url=args.redis_url)
             await service.start()
@@ -227,7 +247,7 @@ def main():
     # Comando principal
     parser.add_argument(
         "command",
-        choices=["orchestrator", "api_gateway", "data_processing", "ml_service", "service_registry", "status", "test"],
+        choices=["orchestrator", "api_gateway", "data_processing", "ml_service", "geospatial_service", "reporting_service", "service_registry", "status", "test"],
         help="Command to run"
     )
     
