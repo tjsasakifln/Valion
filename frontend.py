@@ -780,6 +780,9 @@ def main():
     if check_user_role("admin"):
         menu_options.append("User Management")
     
+    # Privacy and Data Governance (available to all users)
+    menu_options.extend(["Privacy & Data", "My Data"])
+    
     page = st.sidebar.radio("Choose an option", menu_options)
     
     if page == "New Evaluation":
@@ -796,6 +799,10 @@ def main():
         show_shap_laboratory_page()
     elif page == "User Management":
         show_user_management_page()
+    elif page == "Privacy & Data":
+        show_privacy_governance_page()
+    elif page == "My Data":
+        show_my_data_page()
     elif page == "About":
         show_about_page()
 
@@ -2883,6 +2890,251 @@ def show_about_page():
         - PostgreSQL (produção)
         - Redis (cache e broker)
         """)
+
+def show_privacy_governance_page():
+    """Privacy and Data Governance page for admins."""
+    st.header("🔒 Privacy & Data Governance")
+    
+    # Check if user has admin privileges
+    if not check_user_role("admin"):
+        st.error("Access denied. Administrator privileges required.")
+        return
+    
+    st.markdown("""
+    This section provides tools for data privacy compliance, including GDPR requirements,
+    data anonymization, and audit trail management.
+    """)
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Privacy Report", "🔍 PII Access Log", "📥 Data Export", "🗑️ Data Deletion"])
+    
+    with tab1:
+        st.subheader("Privacy Compliance Report")
+        
+        if st.button("Generate Privacy Report"):
+            try:
+                response = requests.get(
+                    f"{API_BASE_URL}/privacy/report",
+                    headers=get_auth_headers()
+                )
+                if response.status_code == 200:
+                    report = response.json()
+                    
+                    # Display metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("PII Access Events (30d)", report['privacy_metrics']['pii_access_events'])
+                    with col2:
+                        st.metric("Data Export Requests", report['privacy_metrics']['data_export_requests'])
+                    with col3:
+                        st.metric("Data Deletion Requests", report['privacy_metrics']['data_deletion_requests'])
+                    with col4:
+                        st.metric("Active Users with PII", report['privacy_metrics']['active_users_with_pii'])
+                    
+                    # Compliance status
+                    st.subheader("Compliance Status")
+                    status = report['compliance_status']
+                    for key, value in status.items():
+                        st.write(f"✅ {key.replace('_', ' ').title()}: {'Enabled' if value else 'Disabled'}")
+                    
+                    # Recommendations
+                    if report['recommendations']:
+                        st.subheader("Recommendations")
+                        for rec in report['recommendations']:
+                            st.warning(rec)
+                else:
+                    st.error(f"Failed to generate report: {response.text}")
+            except Exception as e:
+                st.error(f"Error generating privacy report: {e}")
+    
+    with tab2:
+        st.subheader("PII Access Log")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            days_back = st.number_input("Days to look back", min_value=1, max_value=365, value=30)
+        with col2:
+            if st.button("Load PII Access Log"):
+                try:
+                    response = requests.get(
+                        f"{API_BASE_URL}/privacy/pii-access-log",
+                        params={"days_back": days_back},
+                        headers=get_auth_headers()
+                    )
+                    if response.status_code == 200:
+                        access_log = response.json()
+                        if access_log:
+                            df = pd.DataFrame(access_log)
+                            st.dataframe(df, use_container_width=True)
+                        else:
+                            st.info("No PII access events found in the specified period.")
+                    else:
+                        st.error(f"Failed to load access log: {response.text}")
+                except Exception as e:
+                    st.error(f"Error loading PII access log: {e}")
+    
+    with tab3:
+        st.subheader("Export User Data (GDPR Right of Access)")
+        
+        user_id = st.text_input("User ID to export data for")
+        anonymize_export = st.checkbox("Anonymize exported data", value=False)
+        
+        if st.button("Export User Data") and user_id:
+            try:
+                response = requests.post(
+                    f"{API_BASE_URL}/privacy/export-user-data",
+                    json={"user_id": user_id, "anonymize": anonymize_export},
+                    headers=get_auth_headers()
+                )
+                if response.status_code == 200:
+                    user_data = response.json()
+                    
+                    # Display export summary
+                    st.success("Data export completed successfully!")
+                    st.json(user_data)
+                    
+                    # Download button
+                    json_str = json.dumps(user_data, indent=2)
+                    st.download_button(
+                        label="Download User Data as JSON",
+                        data=json_str,
+                        file_name=f"user_data_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json"
+                    )
+                else:
+                    st.error(f"Failed to export user data: {response.text}")
+            except Exception as e:
+                st.error(f"Error exporting user data: {e}")
+    
+    with tab4:
+        st.subheader("Delete User Data (GDPR Right to be Forgotten)")
+        
+        st.warning("⚠️ This action is irreversible and will permanently delete all user data.")
+        
+        user_id_delete = st.text_input("User ID to delete data for", key="delete_user_id")
+        confirmation_token = st.text_input("Confirmation token", type="password", key="delete_token")
+        
+        if st.button("🗑️ Delete User Data", type="primary") and user_id_delete and confirmation_token:
+            if st.checkbox("I understand this action is irreversible"):
+                try:
+                    response = requests.post(
+                        f"{API_BASE_URL}/privacy/delete-user-data",
+                        json={"user_id": user_id_delete, "confirmation_token": confirmation_token},
+                        headers=get_auth_headers()
+                    )
+                    if response.status_code == 200:
+                        deletion_summary = response.json()
+                        st.success("User data deletion completed successfully!")
+                        st.json(deletion_summary)
+                    else:
+                        st.error(f"Failed to delete user data: {response.text}")
+                except Exception as e:
+                    st.error(f"Error deleting user data: {e}")
+            else:
+                st.error("Please confirm that you understand this action is irreversible.")
+
+def show_my_data_page():
+    """Personal data management page for users."""
+    st.header("📁 My Data")
+    
+    st.markdown("""
+    Manage your personal data and exercise your privacy rights in accordance with GDPR.
+    """)
+    
+    tab1, tab2, tab3 = st.tabs(["📋 My Information", "📥 Export My Data", "🔍 My Activity Log"])
+    
+    with tab1:
+        st.subheader("Personal Information")
+        
+        # Display user information
+        user_info = st.session_state.user_info
+        st.write(f"**Name:** {user_info.get('full_name', 'N/A')}")
+        st.write(f"**Email:** {user_info.get('email', 'N/A')}")
+        st.write(f"**Username:** {user_info.get('username', 'N/A')}")
+        st.write(f"**Account Created:** {user_info.get('created_at', 'N/A')}")
+        st.write(f"**Last Updated:** {user_info.get('updated_at', 'N/A')}")
+        
+        st.subheader("Data Usage Information")
+        st.markdown("""
+        Your data is used for:
+        - Real estate evaluation processing
+        - System audit and compliance
+        - User authentication and authorization
+        - Service improvement and analytics (anonymized)
+        
+        We collect and process your data in accordance with our Privacy Policy and GDPR requirements.
+        """)
+    
+    with tab2:
+        st.subheader("Export My Data")
+        st.markdown("Download all data associated with your account.")
+        
+        anonymize_my_data = st.checkbox("Anonymize my exported data", value=False)
+        
+        if st.button("📥 Export My Data"):
+            try:
+                response = requests.post(
+                    f"{API_BASE_URL}/privacy/export-my-data",
+                    json={"anonymize": anonymize_my_data},
+                    headers=get_auth_headers()
+                )
+                if response.status_code == 200:
+                    my_data = response.json()
+                    
+                    st.success("Your data has been exported successfully!")
+                    
+                    # Show summary
+                    st.write("**Export Summary:**")
+                    st.write(f"- Projects: {len(my_data.get('projects', []))}")
+                    st.write(f"- Evaluations: {len(my_data.get('evaluations', []))}")
+                    st.write(f"- Audit Records: {len(my_data.get('audit_trail', []))}")
+                    st.write(f"- Roles: {len(my_data.get('roles', []))}")
+                    
+                    # Download button
+                    json_str = json.dumps(my_data, indent=2)
+                    st.download_button(
+                        label="📥 Download My Data",
+                        data=json_str,
+                        file_name=f"my_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json"
+                    )
+                else:
+                    st.error(f"Failed to export your data: {response.text}")
+            except Exception as e:
+                st.error(f"Error exporting your data: {e}")
+    
+    with tab3:
+        st.subheader("My Activity Log")
+        
+        days_back = st.selectbox("Show activity for last:", [7, 30, 90, 365], index=1)
+        
+        if st.button("Load My Activity"):
+            try:
+                response = requests.get(
+                    f"{API_BASE_URL}/privacy/my-activity",
+                    params={"days_back": days_back},
+                    headers=get_auth_headers()
+                )
+                if response.status_code == 200:
+                    activity_log = response.json()
+                    if activity_log:
+                        df = pd.DataFrame(activity_log)
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                        df = df.sort_values('timestamp', ascending=False)
+                        
+                        st.dataframe(df[['timestamp', 'operation', 'entity_type']], use_container_width=True)
+                        
+                        # Activity summary
+                        st.subheader("Activity Summary")
+                        activity_counts = df['operation'].value_counts()
+                        fig = px.bar(x=activity_counts.values, y=activity_counts.index, orientation='h',
+                                   title="Activity by Operation Type")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No activity found in the specified period.")
+                else:
+                    st.error(f"Failed to load activity log: {response.text}")
+            except Exception as e:
+                st.error(f"Error loading activity log: {e}")
 
 if __name__ == "__main__":
     main()

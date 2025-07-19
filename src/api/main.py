@@ -2023,6 +2023,186 @@ def _generate_geospatial_recommendations(statistics: Dict[str, Any]) -> List[str
     
     return recommendations
 
+# Privacy and Data Governance API Endpoints
+
+class ExportUserDataRequest(BaseModel):
+    user_id: str
+    anonymize: bool = False
+
+class DeleteUserDataRequest(BaseModel):
+    user_id: str
+    confirmation_token: str
+
+class ExportMyDataRequest(BaseModel):
+    anonymize: bool = False
+
+@app.get("/privacy/report")
+async def get_privacy_report(
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_tenant_db_session)
+):
+    """Generate privacy compliance report (admin only)."""
+    if not auth_service.user_has_role(current_user.id, "admin"):
+        raise HTTPException(status_code=403, detail="Administrator privileges required")
+    
+    try:
+        db_manager = get_database_manager()
+        report = db_manager.generate_privacy_report(session, str(current_user.tenant_id))
+        return report
+    except Exception as e:
+        logger.error(f"Error generating privacy report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate privacy report: {str(e)}")
+
+@app.get("/privacy/pii-access-log")
+async def get_pii_access_log(
+    days_back: int = 30,
+    user_id: Optional[str] = None,
+    accessed_entity_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_tenant_db_session)
+):
+    """Get PII access log for audit purposes (admin only)."""
+    if not auth_service.user_has_role(current_user.id, "admin"):
+        raise HTTPException(status_code=403, detail="Administrator privileges required")
+    
+    try:
+        db_manager = get_database_manager()
+        access_log = db_manager.get_pii_access_log(
+            session, user_id=user_id, accessed_entity_id=accessed_entity_id, days_back=days_back
+        )
+        
+        # Convert to JSON-serializable format
+        log_data = []
+        for record in access_log:
+            log_entry = {
+                'id': str(record.id),
+                'user_id': str(record.user_id),
+                'entity_type': record.entity_type,
+                'entity_id': record.entity_id,
+                'operation': record.operation,
+                'timestamp': record.timestamp.isoformat(),
+                'ip_address': record.ip_address,
+                'metadata': record.metadata
+            }
+            log_data.append(log_entry)
+        
+        return log_data
+    except Exception as e:
+        logger.error(f"Error getting PII access log: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get PII access log: {str(e)}")
+
+@app.post("/privacy/export-user-data")
+async def export_user_data(
+    request: ExportUserDataRequest,
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_tenant_db_session)
+):
+    """Export user data (GDPR right of access) - admin only."""
+    if not auth_service.user_has_role(current_user.id, "admin"):
+        raise HTTPException(status_code=403, detail="Administrator privileges required")
+    
+    try:
+        db_manager = get_database_manager()
+        user_data = db_manager.export_user_data(
+            session=session,
+            user_id=request.user_id,
+            requesting_user_id=str(current_user.id),
+            anonymize=request.anonymize,
+            ip_address=None  # Could be extracted from request headers
+        )
+        return user_data
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error exporting user data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to export user data: {str(e)}")
+
+@app.post("/privacy/export-my-data")
+async def export_my_data(
+    request: ExportMyDataRequest,
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_tenant_db_session)
+):
+    """Export current user's data (GDPR right of access)."""
+    try:
+        db_manager = get_database_manager()
+        user_data = db_manager.export_user_data(
+            session=session,
+            user_id=str(current_user.id),
+            requesting_user_id=str(current_user.id),
+            anonymize=request.anonymize,
+            ip_address=None  # Could be extracted from request headers
+        )
+        return user_data
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error exporting user data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to export user data: {str(e)}")
+
+@app.post("/privacy/delete-user-data")
+async def delete_user_data(
+    request: DeleteUserDataRequest,
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_tenant_db_session)
+):
+    """Delete user data (GDPR right to be forgotten) - admin only."""
+    if not auth_service.user_has_role(current_user.id, "admin"):
+        raise HTTPException(status_code=403, detail="Administrator privileges required")
+    
+    try:
+        db_manager = get_database_manager()
+        deletion_summary = db_manager.delete_user_data(
+            session=session,
+            user_id=request.user_id,
+            requesting_user_id=str(current_user.id),
+            confirmation_token=request.confirmation_token,
+            ip_address=None  # Could be extracted from request headers
+        )
+        return deletion_summary
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting user data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete user data: {str(e)}")
+
+@app.get("/privacy/my-activity")
+async def get_my_activity(
+    days_back: int = 30,
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_tenant_db_session)
+):
+    """Get current user's activity log."""
+    try:
+        db_manager = get_database_manager()
+        audit_records = db_manager.get_audit_trail(
+            session=session,
+            user_id=str(current_user.id),
+            limit=1000,
+            verify_integrity=False
+        )
+        
+        # Filter by date and convert to JSON-serializable format
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.utcnow() - timedelta(days=days_back)
+        
+        activity_data = []
+        for record in audit_records:
+            if record.timestamp >= cutoff_date:
+                activity_entry = {
+                    'id': str(record.id),
+                    'operation': record.operation,
+                    'entity_type': record.entity_type,
+                    'entity_id': record.entity_id,
+                    'timestamp': record.timestamp.isoformat()
+                }
+                activity_data.append(activity_entry)
+        
+        return activity_data
+    except Exception as e:
+        logger.error(f"Error getting user activity: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get user activity: {str(e)}")
+
 @app.websocket("/ws/{evaluation_id}")
 async def websocket_endpoint(websocket: WebSocket, evaluation_id: str):
     """

@@ -19,6 +19,7 @@ from functools import wraps
 from threading import local
 
 from .models import Base, Tenant, User, Role, Project, Evaluation, EvaluationResult, AuditTrail, ModelArtifact, user_roles
+from ..core.anonymizer import get_anonymizer
 
 
 # Thread-local storage for tenant context
@@ -1243,6 +1244,386 @@ class DatabaseManager:
         return session.query(AuditTrail).filter(
             AuditTrail.evaluation_id == evaluation_id
         ).order_by(AuditTrail.timestamp.asc()).all()
+    
+    # Privacy and Data Governance Methods
+    
+    def log_pii_access(self, session: Session, user_id: str, accessed_entity_type: str,
+                      accessed_entity_id: str, pii_fields: List[str],
+                      access_purpose: str = "data_access", ip_address: Optional[str] = None,
+                      user_agent: Optional[str] = None) -> AuditTrail:
+        """
+        Log access to personally identifiable information (PII).
+        
+        Args:
+            session: Database session
+            user_id: ID of user accessing PII
+            accessed_entity_type: Type of entity containing PII (user, tenant, etc.)
+            accessed_entity_id: ID of entity containing PII
+            pii_fields: List of PII fields accessed
+            access_purpose: Purpose of access
+            ip_address: IP address of accessor
+            user_agent: User agent of accessor
+            
+        Returns:
+            AuditTrail: Created audit record
+        """
+        return self.create_audit_trail(
+            session=session,
+            user_id=user_id,
+            operation='access_pii_data',
+            entity_type=accessed_entity_type,
+            entity_id=accessed_entity_id,
+            metadata={
+                'pii_fields_accessed': pii_fields,
+                'access_purpose': access_purpose,
+                'pii_access_timestamp': datetime.utcnow().isoformat(),
+                'data_sensitivity_level': 'high'
+            },
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+    
+    def export_user_data(self, session: Session, user_id: str, requesting_user_id: str,
+                        anonymize: bool = False, ip_address: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Export all data associated with a user (GDPR right of access).
+        
+        Args:
+            session: Database session
+            user_id: ID of user whose data to export
+            requesting_user_id: ID of user requesting the export
+            anonymize: Whether to anonymize the exported data
+            ip_address: IP address of requester
+            
+        Returns:
+            Dictionary containing all user data
+        """
+        anonymizer = get_anonymizer()
+        
+        # Get user data
+        user = session.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        # Log PII access
+        pii_fields = ['full_name', 'email', 'username']
+        self.log_pii_access(
+            session=session,
+            user_id=requesting_user_id,
+            accessed_entity_type='user',
+            accessed_entity_id=user_id,
+            pii_fields=pii_fields,
+            access_purpose='gdpr_data_export',
+            ip_address=ip_address
+        )
+        
+        # Collect user data
+        user_data = {
+            'user_info': {
+                'id': str(user.id),
+                'tenant_id': str(user.tenant_id),
+                'username': user.username,
+                'email': user.email,
+                'full_name': user.full_name,
+                'created_at': user.created_at.isoformat(),
+                'updated_at': user.updated_at.isoformat(),
+                'is_active': user.is_active
+            },
+            'projects': [],
+            'evaluations': [],
+            'audit_trail': [],
+            'roles': []
+        }
+        
+        # Get user's projects
+        projects = session.query(Project).filter(Project.owner_id == user_id).all()
+        for project in projects:
+            project_data = {
+                'id': str(project.id),
+                'name': project.name,
+                'description': project.description,
+                'created_at': project.created_at.isoformat(),
+                'updated_at': project.updated_at.isoformat()
+            }
+            user_data['projects'].append(project_data)
+        
+        # Get user's evaluations
+        evaluations = session.query(Evaluation).filter(Evaluation.user_id == user_id).all()
+        for evaluation in evaluations:
+            eval_data = {
+                'id': str(evaluation.id),
+                'name': evaluation.name,
+                'description': evaluation.description,
+                'status': evaluation.status,
+                'created_at': evaluation.created_at.isoformat(),
+                'data_file_path': evaluation.data_file_path if not anonymize else anonymizer._anonymize_file_path(evaluation.data_file_path)
+            }
+            user_data['evaluations'].append(eval_data)
+        
+        # Get user's roles
+        for role in user.roles:
+            role_data = {
+                'name': role.name,
+                'display_name': role.display_name,
+                'permissions': role.permissions
+            }
+            user_data['roles'].append(role_data)
+        
+        # Get audit trail for user
+        audit_records = session.query(AuditTrail).filter(AuditTrail.user_id == user_id).order_by(AuditTrail.timestamp.desc()).limit(1000).all()
+        for audit in audit_records:
+            audit_data = {
+                'operation': audit.operation,
+                'entity_type': audit.entity_type,
+                'timestamp': audit.timestamp.isoformat(),
+                'ip_address': audit.ip_address if not anonymize else anonymizer._apply_anonymization_single(audit.ip_address or '', 'fake_ip')
+            }
+            user_data['audit_trail'].append(audit_data)
+        
+        # Anonymize if requested
+        if anonymize:
+            user_data['user_info'] = anonymizer.anonymize_user_data(user_data['user_info'])
+        
+        # Log the export operation
+        self.create_audit_trail(
+            session=session,
+            user_id=requesting_user_id,
+            operation='export_user_data',
+            entity_type='user',
+            entity_id=user_id,
+            metadata={
+                'anonymized': anonymize,
+                'export_timestamp': datetime.utcnow().isoformat(),
+                'records_exported': {
+                    'projects': len(user_data['projects']),
+                    'evaluations': len(user_data['evaluations']),
+                    'audit_records': len(user_data['audit_trail']),
+                    'roles': len(user_data['roles'])
+                }
+            },
+            ip_address=ip_address
+        )
+        
+        return user_data
+    
+    def delete_user_data(self, session: Session, user_id: str, requesting_user_id: str,
+                        confirmation_token: str, ip_address: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Delete all user data (GDPR right to be forgotten).
+        
+        Args:
+            session: Database session
+            user_id: ID of user whose data to delete
+            requesting_user_id: ID of user requesting the deletion
+            confirmation_token: Security token to confirm deletion
+            ip_address: IP address of requester
+            
+        Returns:
+            Dictionary with deletion summary
+        """
+        # Verify user exists
+        user = session.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        # Verify confirmation token (simple implementation)
+        expected_token = hashlib.sha256(f"{user_id}{user.email}delete_request".encode()).hexdigest()[:16]
+        if confirmation_token != expected_token:
+            raise ValueError("Invalid confirmation token")
+        
+        deletion_summary = {
+            'user_id': user_id,
+            'deletion_timestamp': datetime.utcnow().isoformat(),
+            'deleted_data': {
+                'user_record': False,
+                'projects': 0,
+                'evaluations': 0,
+                'model_artifacts': 0,
+                'audit_records_anonymized': 0
+            }
+        }
+        
+        try:
+            # Log PII access before deletion
+            self.log_pii_access(
+                session=session,
+                user_id=requesting_user_id,
+                accessed_entity_type='user',
+                accessed_entity_id=user_id,
+                pii_fields=['full_name', 'email', 'username'],
+                access_purpose='gdpr_data_deletion',
+                ip_address=ip_address
+            )
+            
+            # Delete or anonymize projects owned by user
+            projects = session.query(Project).filter(Project.owner_id == user_id).all()
+            for project in projects:
+                # For projects, we'll transfer ownership to a system user rather than delete
+                # to preserve evaluation data integrity
+                project.owner_id = None  # Set to null or system user
+                deletion_summary['deleted_data']['projects'] += 1
+            
+            # Handle evaluations - we preserve for audit but anonymize user reference
+            evaluations = session.query(Evaluation).filter(Evaluation.user_id == user_id).all()
+            for evaluation in evaluations:
+                # Keep evaluation for data integrity but anonymize
+                evaluation.user_id = None  # Or set to anonymous user ID
+                deletion_summary['deleted_data']['evaluations'] += 1
+            
+            # Delete model artifacts files and records
+            artifacts = session.query(ModelArtifact).join(Evaluation).filter(Evaluation.user_id == user_id).all()
+            for artifact in artifacts:
+                # Delete physical files if they exist
+                if os.path.exists(artifact.file_path):
+                    try:
+                        os.remove(artifact.file_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete artifact file {artifact.file_path}: {e}")
+                
+                session.delete(artifact)
+                deletion_summary['deleted_data']['model_artifacts'] += 1
+            
+            # Anonymize audit trail records (can't delete due to immutability)
+            audit_records = session.query(AuditTrail).filter(AuditTrail.user_id == user_id).all()
+            anonymizer = get_anonymizer()
+            for audit in audit_records:
+                if audit.metadata:
+                    # Anonymize any PII in metadata
+                    audit.metadata = anonymizer.anonymize_user_data(audit.metadata)
+                deletion_summary['deleted_data']['audit_records_anonymized'] += 1
+            
+            # Remove user from roles
+            user.roles.clear()
+            
+            # Finally, delete the user record itself
+            session.delete(user)
+            deletion_summary['deleted_data']['user_record'] = True
+            
+            # Log the deletion operation
+            self.create_audit_trail(
+                session=session,
+                user_id=requesting_user_id,
+                operation='delete_user_data_gdpr',
+                entity_type='user',
+                entity_id=user_id,
+                metadata={
+                    'deletion_summary': deletion_summary,
+                    'confirmation_token_used': confirmation_token[:8] + "...",
+                    'gdpr_compliance': True
+                },
+                ip_address=ip_address
+            )
+            
+            session.commit()
+            logger.info(f"Successfully deleted user data for user {user_id}")
+            
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to delete user data for user {user_id}: {e}")
+            raise
+        
+        return deletion_summary
+    
+    def get_pii_access_log(self, session: Session, user_id: Optional[str] = None,
+                          accessed_entity_id: Optional[str] = None,
+                          days_back: int = 30) -> List[AuditTrail]:
+        """
+        Get log of PII access for audit purposes.
+        
+        Args:
+            session: Database session
+            user_id: Filter by user who accessed PII
+            accessed_entity_id: Filter by entity whose PII was accessed
+            days_back: Number of days to look back
+            
+        Returns:
+            List of PII access audit records
+        """
+        cutoff_date = datetime.utcnow() - timedelta(days=days_back)
+        
+        query = session.query(AuditTrail).filter(
+            AuditTrail.operation == 'access_pii_data',
+            AuditTrail.timestamp >= cutoff_date
+        )
+        
+        if user_id:
+            query = query.filter(AuditTrail.user_id == user_id)
+        
+        if accessed_entity_id:
+            query = query.filter(AuditTrail.entity_id == accessed_entity_id)
+        
+        return query.order_by(AuditTrail.timestamp.desc()).all()
+    
+    def generate_privacy_report(self, session: Session, tenant_id: str) -> Dict[str, Any]:
+        """
+        Generate privacy compliance report for a tenant.
+        
+        Args:
+            session: Database session
+            tenant_id: Tenant ID to generate report for
+            
+        Returns:
+            Privacy compliance report
+        """
+        report_date = datetime.utcnow()
+        cutoff_30_days = report_date - timedelta(days=30)
+        
+        # Count PII access events
+        pii_access_count = session.query(AuditTrail).filter(
+            AuditTrail.operation == 'access_pii_data',
+            AuditTrail.timestamp >= cutoff_30_days
+        ).count()
+        
+        # Count data exports
+        export_count = session.query(AuditTrail).filter(
+            AuditTrail.operation == 'export_user_data',
+            AuditTrail.timestamp >= cutoff_30_days
+        ).count()
+        
+        # Count data deletions
+        deletion_count = session.query(AuditTrail).filter(
+            AuditTrail.operation == 'delete_user_data_gdpr',
+            AuditTrail.timestamp >= cutoff_30_days
+        ).count()
+        
+        # Count active users with PII
+        active_users = session.query(User).filter(
+            User.tenant_id == tenant_id,
+            User.is_active == True
+        ).count()
+        
+        report = {
+            'tenant_id': tenant_id,
+            'report_date': report_date.isoformat(),
+            'period_days': 30,
+            'privacy_metrics': {
+                'pii_access_events': pii_access_count,
+                'data_export_requests': export_count,
+                'data_deletion_requests': deletion_count,
+                'active_users_with_pii': active_users
+            },
+            'compliance_status': {
+                'gdpr_ready': True,
+                'audit_trail_enabled': True,
+                'data_anonymization_available': True,
+                'data_export_available': True,
+                'data_deletion_available': True
+            },
+            'recommendations': []
+        }
+        
+        # Add recommendations based on metrics
+        if pii_access_count > active_users * 10:  # High access ratio
+            report['recommendations'].append(
+                "Consider reviewing PII access patterns - high access frequency detected"
+            )
+        
+        if export_count == 0 and deletion_count == 0:
+            report['recommendations'].append(
+                "No GDPR requests processed - ensure users are aware of their rights"
+            )
+        
+        return report
 
 
 # Singleton para gerenciador de banco
