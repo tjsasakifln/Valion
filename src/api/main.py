@@ -4,7 +4,7 @@ FastAPI API for Valion - Real Estate Evaluation Platform
 Responsible for serving the API and managing WebSocket connections.
 """
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -32,6 +32,14 @@ from src.core.geospatial_analysis import create_geospatial_analyzer, LocationAna
 from src.config.settings import Settings
 from src.workers.tasks import process_evaluation
 from src.websocket.websocket_manager import websocket_manager
+from src.auth.auth_service import auth_service
+from src.auth.dependencies import (
+    get_current_user, require_permission, require_role, require_admin,
+    require_evaluator, require_auditor, get_db_session, get_tenant_db_session,
+    get_current_tenant, get_current_tenant_id_from_token
+)
+from src.database.database import get_database_manager
+from src.database.models import User, Role, Tenant
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO)
@@ -298,6 +306,51 @@ class DataEnrichmentRequest(BaseModel):
     city_center_lat: Optional[float] = None
     city_center_lon: Optional[float] = None
 
+# Authentication models
+class LoginRequest(BaseModel):
+    """Login request."""
+    username: str
+    password: str
+
+class RefreshTokenRequest(BaseModel):
+    """Refresh token request."""
+    refresh_token: str
+
+class UserCreateRequest(BaseModel):
+    """User creation request."""
+    username: str
+    email: str
+    full_name: str
+    roles: Optional[List[str]] = None
+
+class UserRoleAssignmentRequest(BaseModel):
+    """User role assignment request."""
+    user_id: str
+    role_id: str
+
+class RoleCreateRequest(BaseModel):
+    """Role creation request."""
+    name: str
+    display_name: str
+    description: Optional[str] = None
+    permissions: List[str] = []
+
+# Tenant management models
+class TenantCreateRequest(BaseModel):
+    """Tenant creation request."""
+    name: str
+    display_name: str
+    subdomain: str
+    contact_email: str
+    contact_phone: Optional[str] = None
+    subscription_plan: str = 'basic'
+
+class SubdomainLoginRequest(BaseModel):
+    """Login request with subdomain."""
+    username: str
+    password: str
+    subdomain: str
+
 
 
 # API endpoints
@@ -312,8 +365,316 @@ async def health_check():
     """Checks API health."""
     return {"status": "healthy", "timestamp": datetime.now()}
 
+# Authentication endpoints
+@app.post("/auth/login")
+async def login(
+    request: LoginRequest,
+    session = Depends(get_db_session)
+):
+    """Login endpoint."""
+    try:
+        result = auth_service.login(session, request.username, request.password)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/auth/login-subdomain")
+async def login_with_subdomain(
+    request: SubdomainLoginRequest,
+    session = Depends(get_db_session)
+):
+    """Login endpoint with tenant subdomain."""
+    try:
+        result = auth_service.login_with_subdomain(session, request.username, request.password, request.subdomain)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Subdomain login error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/auth/refresh")
+async def refresh_token(
+    request: RefreshTokenRequest,
+    session = Depends(get_db_session)
+):
+    """Refresh access token."""
+    try:
+        result = auth_service.refresh_access_token(session, request.refresh_token)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token refresh error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/auth/me")
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_db_session)
+):
+    """Get current user information."""
+    db_manager = get_database_manager()
+    roles = db_manager.get_user_roles(session, str(current_user.id))
+    permissions = db_manager.get_user_permissions(session, str(current_user.id))
+    
+    return {
+        "id": str(current_user.id),
+        "username": current_user.username,
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "roles": [{"id": str(role.id), "name": role.name, "display_name": role.display_name} for role in roles],
+        "permissions": permissions,
+        "is_active": current_user.is_active
+    }
+
+# User management endpoints (admin only)
+@app.post("/admin/users")
+async def create_user(
+    request: UserCreateRequest,
+    current_tenant: Tenant = Depends(get_current_tenant),
+    session = Depends(get_tenant_db_session),
+    _ = Depends(require_admin())
+):
+    """Create a new user (admin only)."""
+    db_manager = get_database_manager()
+    
+    try:
+        # Create user
+        user = db_manager.create_user(
+            session=session,
+            tenant_id=str(current_tenant.id),
+            username=request.username,
+            email=request.email,
+            full_name=request.full_name
+        )
+        
+        # Assign roles if specified
+        if request.roles:
+            for role_name in request.roles:
+                role = db_manager.get_role_by_name(session, role_name)
+                if role:
+                    db_manager.assign_role_to_user(session, str(user.id), str(role.id))
+        
+        return {
+            "id": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "message": "User created successfully"
+        }
+    except Exception as e:
+        logger.error(f"User creation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/admin/users")
+async def list_users(
+    session = Depends(get_db_session),
+    _ = Depends(require_admin())
+):
+    """List all users (admin only)."""
+    db_manager = get_database_manager()
+    
+    with db_manager.get_session() as db_session:
+        users = db_session.query(User).filter(User.is_active == True).all()
+        
+        result = []
+        for user in users:
+            roles = db_manager.get_user_roles(db_session, str(user.id))
+            result.append({
+                "id": str(user.id),
+                "username": user.username,
+                "email": user.email,
+                "full_name": user.full_name,
+                "roles": [{"id": str(role.id), "name": role.name, "display_name": role.display_name} for role in roles],
+                "created_at": user.created_at,
+                "is_active": user.is_active
+            })
+        
+        return result
+
+@app.post("/admin/users/assign-role")
+async def assign_role_to_user(
+    request: UserRoleAssignmentRequest,
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_db_session),
+    _ = Depends(require_admin())
+):
+    """Assign role to user (admin only)."""
+    db_manager = get_database_manager()
+    
+    success = db_manager.assign_role_to_user(
+        session=session,
+        user_id=request.user_id,
+        role_id=request.role_id,
+        assigned_by_user_id=str(current_user.id)
+    )
+    
+    if success:
+        return {"message": "Role assigned successfully"}
+    else:
+        raise HTTPException(status_code=400, detail="Failed to assign role")
+
+@app.delete("/admin/users/{user_id}/roles/{role_id}")
+async def remove_role_from_user(
+    user_id: str,
+    role_id: str,
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_db_session),
+    _ = Depends(require_admin())
+):
+    """Remove role from user (admin only)."""
+    db_manager = get_database_manager()
+    
+    success = db_manager.remove_role_from_user(
+        session=session,
+        user_id=user_id,
+        role_id=role_id,
+        removed_by_user_id=str(current_user.id)
+    )
+    
+    if success:
+        return {"message": "Role removed successfully"}
+    else:
+        raise HTTPException(status_code=400, detail="Failed to remove role")
+
+# Role management endpoints (admin only)
+@app.get("/admin/roles")
+async def list_roles(
+    session = Depends(get_db_session),
+    _ = Depends(require_admin())
+):
+    """List all roles (admin only)."""
+    db_manager = get_database_manager()
+    roles = db_manager.get_all_roles(session)
+    
+    return [
+        {
+            "id": str(role.id),
+            "name": role.name,
+            "display_name": role.display_name,
+            "description": role.description,
+            "permissions": role.permissions,
+            "created_at": role.created_at,
+            "is_active": role.is_active
+        }
+        for role in roles
+    ]
+
+@app.post("/admin/roles")
+async def create_role(
+    request: RoleCreateRequest,
+    current_user: User = Depends(get_current_user),
+    session = Depends(get_db_session),
+    _ = Depends(require_admin())
+):
+    """Create a new role (admin only)."""
+    db_manager = get_database_manager()
+    
+    try:
+        role = db_manager.create_role(
+            session=session,
+            name=request.name,
+            display_name=request.display_name,
+            description=request.description,
+            permissions=request.permissions,
+            user_id=str(current_user.id)
+        )
+        
+        return {
+            "id": str(role.id),
+            "name": role.name,
+            "display_name": role.display_name,
+            "description": role.description,
+            "permissions": role.permissions,
+            "message": "Role created successfully"
+        }
+    except Exception as e:
+        logger.error(f"Role creation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Super admin endpoints for tenant management
+@app.post("/super-admin/tenants")
+async def create_tenant(
+    request: TenantCreateRequest,
+    session = Depends(get_db_session),
+    # TODO: Add super admin role check
+):
+    """Create a new tenant (super admin only)."""
+    db_manager = get_database_manager()
+    
+    try:
+        tenant = db_manager.create_tenant(
+            session=session,
+            name=request.name,
+            display_name=request.display_name,
+            subdomain=request.subdomain,
+            contact_email=request.contact_email,
+            contact_phone=request.contact_phone,
+            subscription_plan=request.subscription_plan
+        )
+        
+        return {
+            "id": str(tenant.id),
+            "name": tenant.name,
+            "display_name": tenant.display_name,
+            "subdomain": tenant.subdomain,
+            "subscription_plan": tenant.subscription_plan,
+            "message": "Tenant created successfully"
+        }
+    except Exception as e:
+        logger.error(f"Tenant creation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/tenant/info")
+async def get_tenant_info(
+    current_tenant: Tenant = Depends(get_current_tenant)
+):
+    """Get current tenant information."""
+    return {
+        "id": str(current_tenant.id),
+        "name": current_tenant.name,
+        "display_name": current_tenant.display_name,
+        "subdomain": current_tenant.subdomain,
+        "subscription_plan": current_tenant.subscription_plan,
+        "max_users": current_tenant.max_users,
+        "max_projects": current_tenant.max_projects,
+        "max_evaluations_per_month": current_tenant.max_evaluations_per_month,
+        "is_trial": current_tenant.is_trial,
+        "trial_ends_at": current_tenant.trial_ends_at,
+        "created_at": current_tenant.created_at
+    }
+
+@app.get("/tenant/usage")
+async def get_tenant_usage(
+    current_tenant: Tenant = Depends(get_current_tenant),
+    session = Depends(get_tenant_db_session)
+):
+    """Get tenant usage statistics."""
+    db_manager = get_database_manager()
+    usage_stats = db_manager.get_tenant_usage_stats(session, str(current_tenant.id))
+    
+    return {
+        "tenant_id": str(current_tenant.id),
+        "usage": usage_stats,
+        "limits": {
+            "max_users": current_tenant.max_users,
+            "max_projects": current_tenant.max_projects,
+            "max_evaluations_per_month": current_tenant.max_evaluations_per_month
+        }
+    }
+
 @app.post("/evaluations/", response_model=dict)
-async def create_evaluation(request: EvaluationRequest):
+async def create_evaluation(
+    request: EvaluationRequest,
+    current_user: User = Depends(get_current_user),
+    current_tenant: Tenant = Depends(get_current_tenant),
+    session = Depends(get_tenant_db_session),
+    _ = Depends(require_evaluator())
+):
     """
     Starts a new real estate evaluation.
     
@@ -362,7 +723,11 @@ async def create_evaluation(request: EvaluationRequest):
     }
 
 @app.get("/evaluations/{evaluation_id}")
-async def get_evaluation_status(evaluation_id: str):
+async def get_evaluation_status(
+    evaluation_id: str,
+    current_user: User = Depends(get_current_user),
+    _ = Depends(require_permission("evaluation:read"))
+):
     """
     Gets evaluation status.
     
@@ -437,7 +802,11 @@ async def make_prediction(evaluation_id: str, request: PredictionRequest):
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    _ = Depends(require_evaluator())
+):
     """
     Uploads data file with robust validations.
     
@@ -634,7 +1003,11 @@ async def get_pending_approval(evaluation_id: str):
     }
 
 @app.get("/evaluations/{evaluation_id}/audit_trail")
-async def get_audit_trail(evaluation_id: str):
+async def get_audit_trail(
+    evaluation_id: str,
+    current_user: User = Depends(get_current_user),
+    _ = Depends(require_auditor())
+):
     """
     Obtém trilha de auditoria completa da avaliação.
     

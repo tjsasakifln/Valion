@@ -20,6 +20,7 @@ import io
 from pathlib import Path
 import asyncio
 import websockets
+import os
 
 # Page configuration
 st.set_page_config(
@@ -32,6 +33,279 @@ st.set_page_config(
 # API settings
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 WS_BASE_URL = os.getenv("WS_BASE_URL", "ws://localhost:8000")
+
+# Authentication state management
+def init_session_state():
+    """Initialize session state for authentication."""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'user_info' not in st.session_state:
+        st.session_state.user_info = None
+    if 'access_token' not in st.session_state:
+        st.session_state.access_token = None
+    if 'refresh_token' not in st.session_state:
+        st.session_state.refresh_token = None
+
+def login_user(username: str, password: str, subdomain: str = None) -> bool:
+    """Login user and store tokens."""
+    try:
+        if subdomain:
+            # Use subdomain login
+            response = requests.post(
+                f"{API_BASE_URL}/auth/login-subdomain",
+                json={"username": username, "password": password, "subdomain": subdomain}
+            )
+        else:
+            # Use regular login
+            response = requests.post(
+                f"{API_BASE_URL}/auth/login",
+                json={"username": username, "password": password}
+            )
+        
+        if response.status_code == 200:
+            data = response.json()
+            st.session_state.authenticated = True
+            st.session_state.access_token = data["access_token"]
+            st.session_state.refresh_token = data["refresh_token"]
+            st.session_state.user_info = data["user"]
+            
+            # Store tenant info if available
+            if "tenant_id" in data["user"]:
+                st.session_state.tenant_id = data["user"]["tenant_id"]
+            
+            return True
+        else:
+            st.error(f"Login failed: {response.json().get('detail', 'Unknown error')}")
+            return False
+    except Exception as e:
+        st.error(f"Login error: {str(e)}")
+        return False
+
+def logout_user():
+    """Logout user and clear session."""
+    st.session_state.authenticated = False
+    st.session_state.access_token = None
+    st.session_state.refresh_token = None
+    st.session_state.user_info = None
+    st.session_state.tenant_id = None
+
+def get_auth_headers() -> Dict[str, str]:
+    """Get authorization headers for API requests."""
+    if st.session_state.access_token:
+        return {"Authorization": f"Bearer {st.session_state.access_token}"}
+    return {}
+
+def check_user_permission(permission: str) -> bool:
+    """Check if current user has specific permission."""
+    if not st.session_state.user_info:
+        return False
+    return permission in st.session_state.user_info.get("permissions", [])
+
+def check_user_role(role: str) -> bool:
+    """Check if current user has specific role."""
+    if not st.session_state.user_info:
+        return False
+    user_roles = [r["name"] for r in st.session_state.user_info.get("roles", [])]
+    return role in user_roles
+
+def show_login_page():
+    """Show login page."""
+    st.markdown('<div class="main-header">🔐 Login - Valion</div>', unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.markdown("### Please login to continue")
+        
+        # Login type selector
+        login_type = st.radio("Login Type", ["Standard Login", "Tenant Login (Subdomain)"])
+        
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            
+            subdomain = None
+            if login_type == "Tenant Login (Subdomain)":
+                subdomain = st.text_input("Tenant Subdomain", placeholder="yourcompany")
+                st.info("💡 Enter your organization's subdomain to login to your specific tenant.")
+            
+            submit_button = st.form_submit_button("Login")
+            
+            if submit_button:
+                if username and password:
+                    if login_type == "Tenant Login (Subdomain)" and not subdomain:
+                        st.error("Please enter the tenant subdomain")
+                    else:
+                        if login_user(username, password, subdomain):
+                            st.success("Login successful!")
+                            st.rerun()
+                        else:
+                            st.error("Invalid credentials")
+                else:
+                    st.error("Please enter both username and password")
+
+def show_user_management_page():
+    """Show user management page (admin only)."""
+    if not check_user_role("admin"):
+        st.error("Access denied. Administrator role required.")
+        return
+    
+    st.header("👥 User Management")
+    
+    tab1, tab2, tab3 = st.tabs(["Users", "Roles", "Role Assignment"])
+    
+    with tab1:
+        st.subheader("Users")
+        
+        # Create new user
+        with st.expander("Create New User"):
+            with st.form("create_user_form"):
+                username = st.text_input("Username")
+                email = st.text_input("Email")
+                full_name = st.text_input("Full Name")
+                
+                # Role selection
+                try:
+                    roles_response = requests.get(
+                        f"{API_BASE_URL}/admin/roles",
+                        headers=get_auth_headers()
+                    )
+                    if roles_response.status_code == 200:
+                        roles = roles_response.json()
+                        role_options = [role["name"] for role in roles]
+                        selected_roles = st.multiselect("Roles", role_options)
+                    else:
+                        selected_roles = []
+                        st.error("Failed to load roles")
+                except Exception as e:
+                    selected_roles = []
+                    st.error(f"Error loading roles: {e}")
+                
+                submit = st.form_submit_button("Create User")
+                
+                if submit and username and email and full_name:
+                    try:
+                        response = requests.post(
+                            f"{API_BASE_URL}/admin/users",
+                            json={
+                                "username": username,
+                                "email": email,
+                                "full_name": full_name,
+                                "roles": selected_roles
+                            },
+                            headers=get_auth_headers()
+                        )
+                        
+                        if response.status_code == 200:
+                            st.success("User created successfully!")
+                            st.rerun()
+                        else:
+                            st.error(f"Error creating user: {response.json().get('detail', 'Unknown error')}")
+                    except Exception as e:
+                        st.error(f"Error creating user: {e}")
+        
+        # List existing users
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/admin/users",
+                headers=get_auth_headers()
+            )
+            
+            if response.status_code == 200:
+                users = response.json()
+                
+                for user in users:
+                    with st.container():
+                        col1, col2, col3 = st.columns([2, 2, 1])
+                        
+                        with col1:
+                            st.write(f"**{user['full_name']}** ({user['username']})")
+                            st.write(user['email'])
+                        
+                        with col2:
+                            roles_str = ", ".join([role['display_name'] for role in user['roles']])
+                            st.write(f"Roles: {roles_str}")
+                        
+                        with col3:
+                            st.write(f"Active: {'✅' if user['is_active'] else '❌'}")
+                        
+                        st.divider()
+            else:
+                st.error("Failed to load users")
+        except Exception as e:
+            st.error(f"Error loading users: {e}")
+    
+    with tab2:
+        st.subheader("Roles")
+        
+        # Create new role
+        with st.expander("Create New Role"):
+            with st.form("create_role_form"):
+                role_name = st.text_input("Role Name")
+                display_name = st.text_input("Display Name")
+                description = st.text_area("Description")
+                
+                # Permissions
+                available_permissions = [
+                    "user:create", "user:read", "user:update", "user:delete",
+                    "role:create", "role:read", "role:update", "role:delete",
+                    "project:create", "project:read", "project:update", "project:delete",
+                    "evaluation:create", "evaluation:read", "evaluation:update", "evaluation:delete",
+                    "audit:read", "system:manage"
+                ]
+                
+                selected_permissions = st.multiselect("Permissions", available_permissions)
+                
+                submit = st.form_submit_button("Create Role")
+                
+                if submit and role_name and display_name:
+                    try:
+                        response = requests.post(
+                            f"{API_BASE_URL}/admin/roles",
+                            json={
+                                "name": role_name,
+                                "display_name": display_name,
+                                "description": description,
+                                "permissions": selected_permissions
+                            },
+                            headers=get_auth_headers()
+                        )
+                        
+                        if response.status_code == 200:
+                            st.success("Role created successfully!")
+                            st.rerun()
+                        else:
+                            st.error(f"Error creating role: {response.json().get('detail', 'Unknown error')}")
+                    except Exception as e:
+                        st.error(f"Error creating role: {e}")
+        
+        # List existing roles
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/admin/roles",
+                headers=get_auth_headers()
+            )
+            
+            if response.status_code == 200:
+                roles = response.json()
+                
+                for role in roles:
+                    with st.container():
+                        st.write(f"**{role['display_name']}** ({role['name']})")
+                        if role['description']:
+                            st.write(role['description'])
+                        
+                        permissions_str = ", ".join(role['permissions'])
+                        st.write(f"Permissions: {permissions_str}")
+                        st.divider()
+            else:
+                st.error("Failed to load roles")
+        except Exception as e:
+            st.error(f"Error loading roles: {e}")
+    
+    with tab3:
+        st.subheader("Role Assignment")
+        st.info("Role assignment functionality is available through the user creation form above.")
 
 # Custom CSS styles
 st.markdown("""
@@ -450,20 +724,63 @@ def create_feature_importance_chart(feature_importance: Dict[str, float]):
 def main():
     """Main application interface."""
     
-    # Header
+    # Initialize session state
+    init_session_state()
+    
+    # Check authentication
+    if not st.session_state.authenticated:
+        show_login_page()
+        return
+    
+    # Header with user info
     st.markdown('<div class="main-header">🏠 Valion - Real Estate Evaluation</div>', unsafe_allow_html=True)
+    
+    # User info and logout in sidebar
+    st.sidebar.markdown(f"**Welcome, {st.session_state.user_info['full_name']}**")
+    user_roles = [role['display_name'] for role in st.session_state.user_info.get('roles', [])]
+    st.sidebar.markdown(f"Roles: {', '.join(user_roles)}")
+    
+    # Show tenant information if available
+    if 'tenant_id' in st.session_state.user_info:
+        try:
+            response = requests.get(
+                f"{API_BASE_URL}/tenant/info",
+                headers=get_auth_headers()
+            )
+            if response.status_code == 200:
+                tenant_info = response.json()
+                st.sidebar.markdown(f"**Tenant:** {tenant_info['display_name']}")
+                st.sidebar.markdown(f"Plan: {tenant_info['subscription_plan'].title()}")
+        except Exception as e:
+            st.sidebar.markdown("**Tenant:** Information unavailable")
+    
+    if st.sidebar.button("Logout"):
+        logout_user()
+        st.rerun()
+    
+    st.sidebar.divider()
     
     # Sidebar with navigation
     st.sidebar.title("Menu")
-    page = st.sidebar.radio("Choose an option", [
-        "New Evaluation", 
-        "Guided Workflow",
-        "Track Evaluation", 
-        "Results", 
-        "Predictions",
-        "SHAP Laboratory",
-        "About"
-    ])
+    
+    # Build menu based on user permissions
+    menu_options = []
+    
+    # Always available
+    menu_options.append("About")
+    
+    # Evaluation features (for evaluators and above)
+    if check_user_permission("evaluation:create"):
+        menu_options.extend(["New Evaluation", "Guided Workflow"])
+    
+    if check_user_permission("evaluation:read"):
+        menu_options.extend(["Track Evaluation", "Results", "Predictions", "SHAP Laboratory"])
+    
+    # Admin features
+    if check_user_role("admin"):
+        menu_options.append("User Management")
+    
+    page = st.sidebar.radio("Choose an option", menu_options)
     
     if page == "New Evaluation":
         show_new_evaluation_page()
@@ -477,6 +794,8 @@ def main():
         show_predictions_page()
     elif page == "SHAP Laboratory":
         show_shap_laboratory_page()
+    elif page == "User Management":
+        show_user_management_page()
     elif page == "About":
         show_about_page()
 

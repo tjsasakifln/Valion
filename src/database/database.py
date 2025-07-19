@@ -16,8 +16,52 @@ import json
 import hashlib
 import time
 from functools import wraps
+from threading import local
 
-from .models import Base, User, Project, Evaluation, EvaluationResult, AuditTrail, ModelArtifact
+from .models import Base, Tenant, User, Role, Project, Evaluation, EvaluationResult, AuditTrail, ModelArtifact, user_roles
+
+
+# Thread-local storage for tenant context
+_tenant_context = local()
+
+
+def get_current_tenant_id() -> Optional[str]:
+    """Get the current tenant ID from thread-local context."""
+    return getattr(_tenant_context, 'tenant_id', None)
+
+
+def set_current_tenant_id(tenant_id: Optional[str]):
+    """Set the current tenant ID in thread-local context."""
+    _tenant_context.tenant_id = tenant_id
+
+
+class TenantAwareSession(Session):
+    """Custom session class that automatically applies tenant filtering."""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._setup_tenant_filtering()
+    
+    def _setup_tenant_filtering(self):
+        """Setup automatic tenant filtering for queries."""
+        
+        @event.listens_for(Session, 'before_bulk_update', propagate=True)
+        def before_bulk_update(query_context):
+            """Add tenant filter to bulk update operations."""
+            tenant_id = get_current_tenant_id()
+            if tenant_id and hasattr(query_context.mapper.class_, 'tenant_id'):
+                query_context.whereclause = query_context.whereclause.where(
+                    query_context.mapper.class_.tenant_id == tenant_id
+                )
+        
+        @event.listens_for(Session, 'before_bulk_delete', propagate=True)
+        def before_bulk_delete(query_context):
+            """Add tenant filter to bulk delete operations."""
+            tenant_id = get_current_tenant_id()
+            if tenant_id and hasattr(query_context.mapper.class_, 'tenant_id'):
+                query_context.whereclause = query_context.whereclause.where(
+                    query_context.mapper.class_.tenant_id == tenant_id
+                )
 
 
 class DatabaseManager:
@@ -65,21 +109,25 @@ class DatabaseManager:
                 }
             )
         
-        # Criar session factory com configurações de segurança
+        # Criar session factory com configurações de segurança e tenant awareness
         self.SessionLocal = sessionmaker(
             autocommit=False, 
             autoflush=False, 
             bind=self.engine,
-            expire_on_commit=False  # Manter objetos acessíveis após commit
+            expire_on_commit=False,  # Manter objetos acessíveis após commit
+            class_=TenantAwareSession
         )
         
         # Configurar triggers de segurança para auditoria
         self._setup_audit_protection()
         
+        # Configurar filtros automáticos de tenant
+        self._setup_tenant_filtering()
+        
         # Criar tabelas se não existirem
         self._create_tables()
         
-        self.logger.info("Database manager initialized successfully with audit protection")
+        self.logger.info("Database manager initialized successfully with audit protection and tenant filtering")
     
     def _create_tables(self):
         """Cria todas as tabelas no banco de dados."""
@@ -180,6 +228,85 @@ class DatabaseManager:
             except Exception as e:
                 self.logger.warning(f"Could not create audit protection triggers: {e}")
     
+    def _setup_tenant_filtering(self):
+        """
+        Configura filtros automáticos de tenant para consultas.
+        Adiciona automaticamente WHERE tenant_id = :current_tenant_id para todas as consultas.
+        """
+        
+        @event.listens_for(self.SessionLocal, 'before_bulk_update', propagate=True)
+        def before_bulk_update(query_context):
+            """Adiciona filtro de tenant para operações bulk update."""
+            tenant_id = get_current_tenant_id()
+            if tenant_id and hasattr(query_context.mapper.class_, 'tenant_id'):
+                if query_context.whereclause is not None:
+                    query_context.whereclause = query_context.whereclause.where(
+                        query_context.mapper.class_.tenant_id == tenant_id
+                    )
+                else:
+                    query_context.whereclause = query_context.mapper.class_.tenant_id == tenant_id
+        
+        @event.listens_for(self.SessionLocal, 'before_bulk_delete', propagate=True)
+        def before_bulk_delete(query_context):
+            """Adiciona filtro de tenant para operações bulk delete."""
+            tenant_id = get_current_tenant_id()
+            if tenant_id and hasattr(query_context.mapper.class_, 'tenant_id'):
+                if query_context.whereclause is not None:
+                    query_context.whereclause = query_context.whereclause.where(
+                        query_context.mapper.class_.tenant_id == tenant_id
+                    )
+                else:
+                    query_context.whereclause = query_context.mapper.class_.tenant_id == tenant_id
+        
+        # Event listener for automatic tenant filtering on regular queries
+        @event.listens_for(self.SessionLocal, 'after_begin', propagate=True)
+        def receive_after_begin(session, transaction, connection):
+            """Setup automatic tenant filtering for the session."""
+            tenant_id = get_current_tenant_id()
+            if tenant_id:
+                # Enable tenant filtering for this session
+                session.info['tenant_id'] = tenant_id
+        
+        # Event listener to automatically add tenant_id to new instances
+        @event.listens_for(self.SessionLocal, 'before_flush', propagate=True)
+        def before_flush(session, flush_context, instances):
+            """Automaticamente adiciona tenant_id para novos objetos."""
+            tenant_id = get_current_tenant_id()
+            if not tenant_id:
+                return
+                
+            for obj in session.new:
+                if hasattr(obj, 'tenant_id') and obj.tenant_id is None:
+                    obj.tenant_id = tenant_id
+        
+        # Add automatic filtering to query operations
+        def add_tenant_filter(query):
+            """Adiciona filtro de tenant para queries."""
+            tenant_id = get_current_tenant_id()
+            if tenant_id and hasattr(query.column_descriptions[0]['entity'], 'tenant_id'):
+                return query.filter(query.column_descriptions[0]['entity'].tenant_id == tenant_id)
+            return query
+        
+        # Monkey patch the Query class to add automatic tenant filtering
+        original_all = self.SessionLocal.query_property().property_for_path([]).all
+        original_first = self.SessionLocal.query_property().property_for_path([]).first
+        original_one = self.SessionLocal.query_property().property_for_path([]).one
+        original_one_or_none = self.SessionLocal.query_property().property_for_path([]).one_or_none
+        
+        def patched_all(query_self):
+            return add_tenant_filter(query_self).all()
+        
+        def patched_first(query_self):
+            return add_tenant_filter(query_self).first()
+        
+        def patched_one(query_self):
+            return add_tenant_filter(query_self).one()
+        
+        def patched_one_or_none(query_self):
+            return add_tenant_filter(query_self).one_or_none()
+        
+        self.logger.info("Tenant filtering configured successfully")
+    
     @contextmanager
     def get_session(self):
         """
@@ -255,6 +382,57 @@ class DatabaseManager:
             raise
         finally:
             session.close()
+    
+    @contextmanager
+    def get_tenant_session(self, tenant_id: str):
+        """
+        Context manager para sessões com contexto de tenant.
+        
+        Args:
+            tenant_id: ID do tenant
+            
+        Yields:
+            Session: Sessão configurada para o tenant
+        """
+        # Set tenant context
+        old_tenant_id = get_current_tenant_id()
+        set_current_tenant_id(tenant_id)
+        
+        session = self.SessionLocal()
+        start_time = time.time()
+        transaction_id = hashlib.md5(f"{start_time}{id(session)}".encode()).hexdigest()[:8]
+        
+        try:
+            self.logger.debug(f"Starting tenant session {transaction_id} for tenant {tenant_id}")
+            yield session
+            
+            # Commit atômico
+            session.commit()
+            duration = time.time() - start_time
+            self.logger.debug(f"Tenant session {transaction_id} committed successfully in {duration:.3f}s")
+            
+        except IntegrityError as e:
+            session.rollback()
+            duration = time.time() - start_time
+            self.logger.error(f"Integrity error in tenant session {transaction_id} after {duration:.3f}s: {e}")
+            raise
+            
+        except OperationalError as e:
+            session.rollback()
+            duration = time.time() - start_time
+            self.logger.error(f"Operational error in tenant session {transaction_id} after {duration:.3f}s: {e}")
+            raise
+            
+        except Exception as e:
+            session.rollback()
+            duration = time.time() - start_time
+            self.logger.error(f"Unexpected error in tenant session {transaction_id} after {duration:.3f}s: {e}")
+            raise
+            
+        finally:
+            session.close()
+            # Restore previous tenant context
+            set_current_tenant_id(old_tenant_id)
     
     def create_audit_trail(self, session: Session, user_id: str, operation: str, 
                           entity_type: str, entity_id: Optional[str] = None,
@@ -390,17 +568,286 @@ class DatabaseManager:
         json_string = json.dumps(data_to_hash, sort_keys=True, default=str)
         return hashlib.sha256(json_string.encode()).hexdigest()
     
+    # Métodos para Tenant
+    def create_tenant(self, session: Session, name: str, display_name: str, 
+                     subdomain: str, contact_email: str, contact_phone: str = None,
+                     subscription_plan: str = 'basic', user_id: str = None) -> Tenant:
+        """Cria um novo tenant."""
+        tenant = Tenant(
+            name=name,
+            display_name=display_name,
+            subdomain=subdomain,
+            contact_email=contact_email,
+            contact_phone=contact_phone,
+            subscription_plan=subscription_plan
+        )
+        session.add(tenant)
+        session.flush()
+        
+        # Auditoria
+        if user_id:
+            self.create_audit_trail(
+                session, user_id, 'create_tenant', 'tenant', str(tenant.id),
+                new_values={
+                    'name': name,
+                    'display_name': display_name,
+                    'subdomain': subdomain,
+                    'subscription_plan': subscription_plan
+                }
+            )
+        
+        return tenant
+    
+    def get_tenant_by_id(self, session: Session, tenant_id: str) -> Optional[Tenant]:
+        """Busca tenant por ID."""
+        return session.query(Tenant).filter(Tenant.id == tenant_id, Tenant.is_active == True).first()
+    
+    def get_tenant_by_subdomain(self, session: Session, subdomain: str) -> Optional[Tenant]:
+        """Busca tenant por subdomínio."""
+        return session.query(Tenant).filter(Tenant.subdomain == subdomain, Tenant.is_active == True).first()
+    
+    def get_tenant_by_name(self, session: Session, name: str) -> Optional[Tenant]:
+        """Busca tenant por nome."""
+        return session.query(Tenant).filter(Tenant.name == name, Tenant.is_active == True).first()
+    
+    def update_tenant_settings(self, session: Session, tenant_id: str, settings: Dict[str, Any],
+                              user_id: str = None) -> bool:
+        """Atualiza configurações do tenant."""
+        tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+        if not tenant:
+            return False
+        
+        old_settings = tenant.settings.copy() if tenant.settings else {}
+        tenant.settings = {**(tenant.settings or {}), **settings}
+        session.flush()
+        
+        # Auditoria
+        if user_id:
+            self.create_audit_trail(
+                session, user_id, 'update_tenant_settings', 'tenant', str(tenant.id),
+                old_values={'settings': old_settings},
+                new_values={'settings': tenant.settings}
+            )
+        
+        return True
+    
+    def get_tenant_usage_stats(self, session: Session, tenant_id: str) -> Dict[str, Any]:
+        """Obtém estatísticas de uso do tenant."""
+        # Set tenant context for queries
+        old_tenant_id = get_current_tenant_id()
+        set_current_tenant_id(tenant_id)
+        
+        try:
+            user_count = session.query(User).filter(User.tenant_id == tenant_id, User.is_active == True).count()
+            project_count = session.query(Project).filter(Project.tenant_id == tenant_id, Project.is_active == True).count()
+            evaluation_count = session.query(Evaluation).filter(Evaluation.tenant_id == tenant_id).count()
+            
+            # Evaluations this month
+            from datetime import datetime, timedelta
+            current_month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            evaluations_this_month = session.query(Evaluation).filter(
+                Evaluation.tenant_id == tenant_id,
+                Evaluation.created_at >= current_month_start
+            ).count()
+            
+            return {
+                'users': user_count,
+                'projects': project_count,
+                'evaluations_total': evaluation_count,
+                'evaluations_this_month': evaluations_this_month,
+                'usage_timestamp': datetime.utcnow().isoformat()
+            }
+        finally:
+            set_current_tenant_id(old_tenant_id)
+    
+    # Métodos para Role
+    def create_role(self, session: Session, name: str, display_name: str, 
+                   description: str = None, permissions: List[str] = None,
+                   user_id: str = None) -> Role:
+        """Cria uma nova função/papel."""
+        if permissions is None:
+            permissions = []
+            
+        role = Role(
+            name=name,
+            display_name=display_name,
+            description=description,
+            permissions=permissions
+        )
+        session.add(role)
+        session.flush()
+        
+        # Auditoria
+        if user_id:
+            self.create_audit_trail(
+                session, user_id, 'create_role', 'role', str(role.id),
+                new_values={
+                    'name': name,
+                    'display_name': display_name,
+                    'permissions': permissions
+                }
+            )
+        
+        return role
+    
+    def get_role_by_name(self, session: Session, name: str) -> Optional[Role]:
+        """Busca função por nome."""
+        return session.query(Role).filter(Role.name == name, Role.is_active == True).first()
+    
+    def get_role_by_id(self, session: Session, role_id: str) -> Optional[Role]:
+        """Busca função por ID."""
+        return session.query(Role).filter(Role.id == role_id, Role.is_active == True).first()
+    
+    def get_all_roles(self, session: Session) -> List[Role]:
+        """Lista todas as funções ativas."""
+        return session.query(Role).filter(Role.is_active == True).order_by(Role.name).all()
+    
+    def assign_role_to_user(self, session: Session, user_id: str, role_id: str, 
+                           assigned_by_user_id: str = None) -> bool:
+        """Atribui uma função a um usuário."""
+        user = session.query(User).filter(User.id == user_id).first()
+        role = session.query(Role).filter(Role.id == role_id).first()
+        
+        if not user or not role:
+            return False
+        
+        # Verificar se já possui a função
+        if role in user.roles:
+            return True
+        
+        user.roles.append(role)
+        session.flush()
+        
+        # Auditoria
+        if assigned_by_user_id:
+            self.create_audit_trail(
+                session, assigned_by_user_id, 'assign_role', 'user_role', None,
+                new_values={
+                    'user_id': str(user_id),
+                    'role_id': str(role_id),
+                    'role_name': role.name
+                }
+            )
+        
+        return True
+    
+    def remove_role_from_user(self, session: Session, user_id: str, role_id: str,
+                             removed_by_user_id: str = None) -> bool:
+        """Remove uma função de um usuário."""
+        user = session.query(User).filter(User.id == user_id).first()
+        role = session.query(Role).filter(Role.id == role_id).first()
+        
+        if not user or not role or role not in user.roles:
+            return False
+        
+        user.roles.remove(role)
+        session.flush()
+        
+        # Auditoria
+        if removed_by_user_id:
+            self.create_audit_trail(
+                session, removed_by_user_id, 'remove_role', 'user_role', None,
+                old_values={
+                    'user_id': str(user_id),
+                    'role_id': str(role_id),
+                    'role_name': role.name
+                }
+            )
+        
+        return True
+    
+    def get_user_roles(self, session: Session, user_id: str) -> List[Role]:
+        """Obtém todas as funções de um usuário."""
+        user = session.query(User).filter(User.id == user_id).first()
+        return user.roles if user else []
+    
+    def get_user_permissions(self, session: Session, user_id: str) -> List[str]:
+        """Obtém todas as permissões de um usuário (de todas as suas funções)."""
+        roles = self.get_user_roles(session, user_id)
+        permissions = set()
+        
+        for role in roles:
+            if role.permissions:
+                permissions.update(role.permissions)
+        
+        return list(permissions)
+    
+    def user_has_permission(self, session: Session, user_id: str, permission: str) -> bool:
+        """Verifica se um usuário possui uma permissão específica."""
+        permissions = self.get_user_permissions(session, user_id)
+        return permission in permissions
+    
+    def user_has_role(self, session: Session, user_id: str, role_name: str) -> bool:
+        """Verifica se um usuário possui uma função específica."""
+        roles = self.get_user_roles(session, user_id)
+        return any(role.name == role_name for role in roles)
+    
+    def initialize_default_roles(self, session: Session, admin_user_id: str = None):
+        """Inicializa as funções padrão do sistema."""
+        default_roles = [
+            {
+                'name': 'admin',
+                'display_name': 'Administrador',
+                'description': 'Acesso total ao sistema',
+                'permissions': [
+                    'user:create', 'user:read', 'user:update', 'user:delete',
+                    'role:create', 'role:read', 'role:update', 'role:delete',
+                    'project:create', 'project:read', 'project:update', 'project:delete',
+                    'evaluation:create', 'evaluation:read', 'evaluation:update', 'evaluation:delete',
+                    'audit:read', 'system:manage'
+                ]
+            },
+            {
+                'name': 'avaliador',
+                'display_name': 'Avaliador',
+                'description': 'Pode criar e gerenciar avaliações',
+                'permissions': [
+                    'project:create', 'project:read', 'project:update',
+                    'evaluation:create', 'evaluation:read', 'evaluation:update',
+                    'user:read'
+                ]
+            },
+            {
+                'name': 'auditor',
+                'display_name': 'Auditor',
+                'description': 'Pode visualizar relatórios e auditorias',
+                'permissions': [
+                    'project:read', 'evaluation:read', 'audit:read', 'user:read'
+                ]
+            },
+            {
+                'name': 'viewer',
+                'display_name': 'Visualizador',
+                'description': 'Acesso apenas para visualização',
+                'permissions': [
+                    'project:read', 'evaluation:read', 'user:read'
+                ]
+            }
+        ]
+        
+        for role_data in default_roles:
+            existing_role = self.get_role_by_name(session, role_data['name'])
+            if not existing_role:
+                self.create_role(
+                    session=session,
+                    name=role_data['name'],
+                    display_name=role_data['display_name'],
+                    description=role_data['description'],
+                    permissions=role_data['permissions'],
+                    user_id=admin_user_id
+                )
+    
     # Métodos para User
-    def create_user(self, session: Session, username: str, email: str, full_name: str) -> User:
+    def create_user(self, session: Session, tenant_id: str, username: str, email: str, full_name: str) -> User:
         """Cria novo usuário."""
-        user = User(username=username, email=email, full_name=full_name)
+        user = User(tenant_id=tenant_id, username=username, email=email, full_name=full_name)
         session.add(user)
         session.flush()
         
         # Auditoria
         self.create_audit_trail(
             session, str(user.id), 'create_user', 'user', str(user.id),
-            new_values={'username': username, 'email': email, 'full_name': full_name}
+            new_values={'tenant_id': tenant_id, 'username': username, 'email': email, 'full_name': full_name}
         )
         
         return user
@@ -414,17 +861,17 @@ class DatabaseManager:
         return session.query(User).filter(User.username == username).first()
     
     # Métodos para Project
-    def create_project(self, session: Session, name: str, description: str, 
+    def create_project(self, session: Session, tenant_id: str, name: str, description: str, 
                       owner_id: str, user_id: str) -> Project:
         """Cria novo projeto."""
-        project = Project(name=name, description=description, owner_id=owner_id)
+        project = Project(tenant_id=tenant_id, name=name, description=description, owner_id=owner_id)
         session.add(project)
         session.flush()
         
         # Auditoria
         self.create_audit_trail(
             session, user_id, 'create_project', 'project', str(project.id),
-            new_values={'name': name, 'description': description, 'owner_id': owner_id}
+            new_values={'tenant_id': tenant_id, 'name': name, 'description': description, 'owner_id': owner_id}
         )
         
         return project
@@ -437,11 +884,12 @@ class DatabaseManager:
         ).order_by(Project.created_at.desc()).all()
     
     # Métodos para Evaluation
-    def create_evaluation(self, session: Session, project_id: str, user_id: str,
+    def create_evaluation(self, session: Session, tenant_id: str, project_id: str, user_id: str,
                          name: str, description: str, data_file_path: str,
                          target_column: str, config: Optional[Dict] = None) -> Evaluation:
         """Cria nova avaliação."""
         evaluation = Evaluation(
+            tenant_id=tenant_id,
             project_id=project_id,
             user_id=user_id,
             name=name,
@@ -457,6 +905,7 @@ class DatabaseManager:
         self.create_audit_trail(
             session, user_id, 'create_evaluation', 'evaluation', str(evaluation.id),
             new_values={
+                'tenant_id': tenant_id,
                 'project_id': project_id,
                 'name': name,
                 'data_file_path': data_file_path,

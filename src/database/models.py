@@ -3,7 +3,7 @@
 Modelos de banco de dados para Valion - Sistema de persistência e auditoria
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Boolean, ForeignKey, Float, Index
+from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Boolean, ForeignKey, Float, Index, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -12,23 +12,113 @@ import uuid
 
 Base = declarative_base()
 
+# Association table for many-to-many relationship between User and Role
+user_roles = Table(
+    'user_roles',
+    Base.metadata,
+    Column('user_id', UUID(as_uuid=True), ForeignKey('users.id'), primary_key=True),
+    Column('role_id', UUID(as_uuid=True), ForeignKey('roles.id'), primary_key=True),
+    Column('assigned_at', DateTime, default=datetime.utcnow, nullable=False),
+    Column('assigned_by', UUID(as_uuid=True), ForeignKey('users.id')),
+    Index('idx_user_roles_user', 'user_id'),
+    Index('idx_user_roles_role', 'role_id'),
+)
+
+
+class Tenant(Base):
+    """Modelo de tenant para isolamento multi-inquilino (multi-tenancy)."""
+    __tablename__ = 'tenants'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(200), unique=True, nullable=False)
+    display_name = Column(String(200), nullable=False)
+    subdomain = Column(String(100), unique=True, nullable=False)
+    
+    # Contact and billing information
+    contact_email = Column(String(100), nullable=False)
+    contact_phone = Column(String(50))
+    billing_address = Column(Text)
+    
+    # Subscription and limits
+    subscription_plan = Column(String(50), default='basic', nullable=False)  # basic, premium, enterprise
+    max_users = Column(Integer, default=10, nullable=False)
+    max_projects = Column(Integer, default=50, nullable=False)
+    max_evaluations_per_month = Column(Integer, default=100, nullable=False)
+    
+    # Configuration
+    settings = Column(JSON, default=dict)  # Tenant-specific settings
+    
+    # Status and timestamps
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_trial = Column(Boolean, default=True, nullable=False)
+    trial_ends_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relacionamentos
+    users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
+    projects = relationship("Project", back_populates="tenant", cascade="all, delete-orphan")
+    evaluations = relationship("Evaluation", back_populates="tenant", cascade="all, delete-orphan")
+    
+    # Índices
+    __table_args__ = (
+        Index('idx_tenant_subdomain', 'subdomain'),
+        Index('idx_tenant_active', 'is_active'),
+        Index('idx_tenant_name', 'name'),
+    )
+
+
+class Role(Base):
+    """Modelo de função/papel para controle de acesso baseado em função (RBAC)."""
+    __tablename__ = 'roles'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(50), unique=True, nullable=False)
+    display_name = Column(String(100), nullable=False)
+    description = Column(Text)
+    permissions = Column(JSON, nullable=False, default=list)  # Lista de permissões
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    # Relacionamentos
+    users = relationship("User", secondary=user_roles, back_populates="roles")
+    
+    # Índices
+    __table_args__ = (
+        Index('idx_role_name', 'name'),
+        Index('idx_role_active', 'is_active'),
+    )
+
 
 class User(Base):
     """Modelo de usuário para autenticação e auditoria."""
     __tablename__ = 'users'
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    username = Column(String(50), unique=True, nullable=False)
-    email = Column(String(100), unique=True, nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey('tenants.id'), nullable=False)
+    username = Column(String(50), nullable=False)
+    email = Column(String(100), nullable=False)
     full_name = Column(String(100), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_active = Column(Boolean, default=True, nullable=False)
     
     # Relacionamentos
+    tenant = relationship("Tenant", back_populates="users")
+    roles = relationship("Role", secondary=user_roles, back_populates="users")
     projects = relationship("Project", back_populates="owner")
     evaluations = relationship("Evaluation", back_populates="user")
     audit_trails = relationship("AuditTrail", back_populates="user")
+    
+    # Índices compostos para garantir unicidade por tenant
+    __table_args__ = (
+        Index('idx_user_tenant', 'tenant_id'),
+        Index('idx_user_username_tenant', 'username', 'tenant_id', unique=True),
+        Index('idx_user_email_tenant', 'email', 'tenant_id', unique=True),
+    )
 
 
 class Project(Base):
@@ -36,6 +126,7 @@ class Project(Base):
     __tablename__ = 'projects'
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey('tenants.id'), nullable=False)
     name = Column(String(200), nullable=False)
     description = Column(Text)
     owner_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
@@ -44,13 +135,16 @@ class Project(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     
     # Relacionamentos
+    tenant = relationship("Tenant", back_populates="projects")
     owner = relationship("User", back_populates="projects")
     evaluations = relationship("Evaluation", back_populates="project")
     
     # Índices
     __table_args__ = (
+        Index('idx_project_tenant', 'tenant_id'),
         Index('idx_project_owner', 'owner_id'),
         Index('idx_project_created', 'created_at'),
+        Index('idx_project_name_tenant', 'name', 'tenant_id'),
     )
 
 
@@ -59,6 +153,7 @@ class Evaluation(Base):
     __tablename__ = 'evaluations'
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey('tenants.id'), nullable=False)
     project_id = Column(UUID(as_uuid=True), ForeignKey('projects.id'), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
     
@@ -83,6 +178,7 @@ class Evaluation(Base):
     config = Column(JSON)  # Configurações específicas da avaliação
     
     # Relacionamentos
+    tenant = relationship("Tenant", back_populates="evaluations")
     project = relationship("Project", back_populates="evaluations")
     user = relationship("User", back_populates="evaluations")
     results = relationship("EvaluationResult", back_populates="evaluation", uselist=False)
@@ -91,10 +187,12 @@ class Evaluation(Base):
     
     # Índices
     __table_args__ = (
+        Index('idx_evaluation_tenant', 'tenant_id'),
         Index('idx_evaluation_status', 'status'),
         Index('idx_evaluation_user', 'user_id'),
         Index('idx_evaluation_project', 'project_id'),
         Index('idx_evaluation_created', 'created_at'),
+        Index('idx_evaluation_tenant_status', 'tenant_id', 'status'),
     )
 
 
